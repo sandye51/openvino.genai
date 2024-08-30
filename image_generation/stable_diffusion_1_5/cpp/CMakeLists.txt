@@ -17,6 +17,12 @@ set(CMAKE_BUILD_TYPE "Release" CACHE STRING "CMake build type")
 
 find_package(OpenVINO REQUIRED COMPONENTS Runtime Threading)
 
+find_package(OpenVINOGenAI REQUIRED PATHS
+        "${CMAKE_BINARY_DIR}"  # Reuse the package from the build.
+        ${OpenVINO_DIR}  # GenAI may be installed alogside OpenVINO.
+    # TODO: add
+)
+
 include(FetchContent)
 
 FetchContent_Declare(cxxopts

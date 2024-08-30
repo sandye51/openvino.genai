@@ -154,6 +154,13 @@ StableDiffusionModels compile_models(const std::string& model_path,
         lora_weights = read_lora_adapters(lora_path, alpha);
     }
 
+    // Tokenizer
+    {
+        Timer t("Loading and compiling tokenizer");
+        // Tokenizer model wil be loaded to CPU: OpenVINO Tokenizers can be inferred on a CPU device only.
+        models.tokenizer = core.compile_model(model_path + "/tokenizer/openvino_tokenizer.xml", "CPU");
+    }
+
     // Text encoder
     {
         Timer t("Loading and compiling text encoder");
@@ -189,19 +196,13 @@ StableDiffusionModels compile_models(const std::string& model_path,
         models.vae_decoder = core.compile_model(vae_decoder_model = ppp.build(), device);
     }
 
-    // Tokenizer
-    {
-        Timer t("Loading and compiling tokenizer");
-        // Tokenizer model wil be loaded to CPU: OpenVINO Tokenizers can be inferred on a CPU device only.
-        models.tokenizer = core.compile_model(model_path + "/tokenizer/openvino_tokenizer.xml", "CPU");
-    }
-
     return models;
 }
 
 ov::Tensor text_encoder(StableDiffusionModels models, std::string& pos_prompt, std::string& neg_prompt, bool do_classifier_free_guidance) {
     const size_t HIDDEN_SIZE = static_cast<size_t>(models.text_encoder.output(0).get_partial_shape()[2].get_length());
     const int32_t EOS_TOKEN_ID = 49407, PAD_TOKEN_ID = EOS_TOKEN_ID;
+    const size_t text_embedding_batch_size = do_classifier_free_guidance ? 2 : 1;
     const ov::Shape input_ids_shape({1, TOKENIZER_MODEL_MAX_LENGTH});
 
     ov::InferRequest tokenizer_req = models.tokenizer.create_infer_request();
@@ -223,16 +224,21 @@ ov::Tensor text_encoder(StableDiffusionModels models, std::string& pos_prompt, s
         text_encoder_req.infer();
     };
 
-    ov::Tensor text_embeddings(ov::element::f32, {2, TOKENIZER_MODEL_MAX_LENGTH, HIDDEN_SIZE});
+    ov::Tensor text_embeddings(ov::element::f32, {text_embedding_batch_size, TOKENIZER_MODEL_MAX_LENGTH, HIDDEN_SIZE});
 
-    if (!do_classifier_free_guidance && neg_prompt != "") {
-        throw std::invalid_argument("Negative prompt is ignored when --guidanceScale < 1.0. Please remove --negPrompt argument.");
+    size_t current_batch_idx = 0;
+    if (do_classifier_free_guidance) {
+        compute_text_embeddings(neg_prompt,
+                                ov::Tensor(text_embeddings, {current_batch_idx, 0, 0},
+                                                            {current_batch_idx + 1, TOKENIZER_MODEL_MAX_LENGTH, HIDDEN_SIZE}));
+        ++current_batch_idx;
+    } else {
+        OPENVINO_ASSERT(neg_prompt.empty(), "Negative prompt is ignored when --guidanceScale < 1.0. Please remove --negPrompt argument.");
     }
 
-    compute_text_embeddings(neg_prompt,
-                            ov::Tensor(text_embeddings, {0, 0, 0}, {1, TOKENIZER_MODEL_MAX_LENGTH, HIDDEN_SIZE}));
     compute_text_embeddings(pos_prompt,
-                            ov::Tensor(text_embeddings, {1, 0, 0}, {2, TOKENIZER_MODEL_MAX_LENGTH, HIDDEN_SIZE}));
+                            ov::Tensor(text_embeddings, {current_batch_idx, 0, 0},
+                                                        {current_batch_idx + 1, TOKENIZER_MODEL_MAX_LENGTH, HIDDEN_SIZE}));
 
     return text_embeddings;
 }
@@ -288,7 +294,6 @@ int32_t main(int32_t argc, char* argv[]) try {
     ("c,useCache", "Use model caching", cxxopts::value<bool>()->default_value("false"))
     ("r,readNPLatent", "Read numpy generated latents from file", cxxopts::value<bool>()->default_value("false"))
     ("m,modelPath", "Specify path of SD model IRs", cxxopts::value<std::string>()->default_value("./models/dreamlike_anime_1_0_ov"))
-    ("t,type", "Specify the type of SD model IRs (FP32, FP16 or INT8)", cxxopts::value<std::string>()->default_value("FP16"))
     ("dynamic", "Specify the model input shape to use dynamic shape", cxxopts::value<bool>()->default_value("false"))
     ("l,loraPath", "Specify path of LoRA file. (*.safetensors).", cxxopts::value<std::string>()->default_value(""))
     ("a,alpha", "alpha for LoRA", cxxopts::value<float>()->default_value("0.75"))("h,help", "Print usage");
@@ -318,8 +323,7 @@ int32_t main(int32_t argc, char* argv[]) try {
     const uint32_t width = result["width"].as<size_t>();
     const bool use_cache = result["useCache"].as<bool>();
     const bool read_np_latent = result["readNPLatent"].as<bool>();
-    const std::string model_base_path = result["modelPath"].as<std::string>();
-    const std::string model_type = result["type"].as<std::string>();
+    const std::string model_path = result["modelPath"].as<std::string>();
     const bool use_dynamic_shapes = result["dynamic"].as<bool>();
     const std::string lora_path = result["loraPath"].as<std::string>();
     const float alpha = result["alpha"].as<float>();
@@ -338,13 +342,6 @@ int32_t main(int32_t argc, char* argv[]) try {
 
     std::cout << "OpenVINO version: " << ov::get_openvino_version() << std::endl;
 
-    const std::string model_path = model_base_path + "/" + model_type;
-    if (!std::filesystem::exists(model_path)) {
-        std::cerr << "Model IRs for type " << model_type << " don't exist in directory " << model_path << "\n";
-        std::cerr << "Refer to README.md to know how to export OpenVINO model with particular data type." << std::endl;
-        return EXIT_FAILURE;
-    }
-
     const size_t batch_size = 1;
     const bool do_classifier_free_guidance = guidance_scale > 1.0;
 
@@ -360,6 +357,7 @@ int32_t main(int32_t argc, char* argv[]) try {
     std::string result_image_path;
 
     // Stable Diffusion pipeline
+    // see https://huggingface.co/docs/diffusers/using-diffusers/write_own_pipeline#deconstruct-the-stable-diffusion-pipeline
     {
         Timer t("Running Stable Diffusion pipeline");
 
@@ -370,7 +368,7 @@ int32_t main(int32_t argc, char* argv[]) try {
         std::vector<std::int64_t> timesteps = scheduler->get_timesteps();
 
         for (uint32_t n = 0; n < num_images; n++) {
-            std::uint32_t seed = num_images == 1 ? user_seed : user_seed + n;
+            std::uint32_t seed = user_seed + n;
 
             const size_t unet_in_channels = static_cast<size_t>(sample_shape[1].get_length());
 
@@ -378,7 +376,7 @@ int32_t main(int32_t argc, char* argv[]) try {
             ov::Shape latent_shape = ov::Shape({batch_size, unet_in_channels, height / VAE_SCALE_FACTOR, width / VAE_SCALE_FACTOR});
             ov::Shape latent_model_input_shape = latent_shape;
             ov::Tensor noise = randn_tensor(latent_shape, read_np_latent, seed);
-            latent_model_input_shape[0] = 2;  // Unet accepts batch 2
+            latent_model_input_shape[0] = do_classifier_free_guidance ? 2 : 1;  // Unet accepts batch 2 in case of CFG
             ov::Tensor latent(ov::element::f32, latent_shape),
                 latent_model_input(ov::element::f32, latent_model_input_shape);
             for (size_t i = 0; i < noise.get_size(); ++i) {
@@ -386,11 +384,13 @@ int32_t main(int32_t argc, char* argv[]) try {
             }
 
             for (size_t inference_step = 0; inference_step < num_inference_steps; inference_step++) {
-                // concat the same latent twice along a batch dimension
+                // concat the same latent twice along a batch dimension in case of CFG
                 latent.copy_to(
                     ov::Tensor(latent_model_input, {0, 0, 0, 0}, {1, latent_shape[1], latent_shape[2], latent_shape[3]}));
-                latent.copy_to(
-                    ov::Tensor(latent_model_input, {1, 0, 0, 0}, {2, latent_shape[1], latent_shape[2], latent_shape[3]}));
+                if (do_classifier_free_guidance) {
+                    latent.copy_to(
+                        ov::Tensor(latent_model_input, {1, 0, 0, 0}, {2, latent_shape[1], latent_shape[2], latent_shape[3]}));
+                }
 
                 scheduler->scale_model_input(latent_model_input, inference_step);
 
@@ -402,12 +402,16 @@ int32_t main(int32_t argc, char* argv[]) try {
 
                 ov::Tensor noisy_residual(noise_pred_tensor.get_element_type(), noise_pred_shape);
 
-                // perform guidance
-                const float* noise_pred_uncond = noise_pred_tensor.data<const float>();
-                const float* noise_pred_text = noise_pred_uncond + ov::shape_size(noise_pred_shape);
-                for (size_t i = 0; i < ov::shape_size(noise_pred_shape); ++i)
-                    noisy_residual.data<float>()[i] =
-                        noise_pred_uncond[i] + guidance_scale * (noise_pred_text[i] - noise_pred_uncond[i]);
+                if (do_classifier_free_guidance) {
+                    // perform guidance
+                    const float* noise_pred_uncond = noise_pred_tensor.data<const float>();
+                    const float* noise_pred_text = noise_pred_uncond + ov::shape_size(noise_pred_shape);
+                    for (size_t i = 0; i < ov::shape_size(noise_pred_shape); ++i)
+                        noisy_residual.data<float>()[i] =
+                            noise_pred_uncond[i] + guidance_scale * (noise_pred_text[i] - noise_pred_uncond[i]);
+                } else {
+                    noisy_residual = noise_pred_tensor;
+                }
 
                 latent = scheduler->step(noisy_residual, latent, inference_step)["latent"];
             }

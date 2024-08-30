@@ -113,7 +113,7 @@ Download and put LoRA safetensors model into the models directory. When running 
 
 ### Step 5: Run Pipeline
 ```shell
-./build/stable_diffusion [-p <posPrompt>] [-n <negPrompt>] [-s <seed>] [--height <output image>] [--width <output image>] [-d <device>] [-r <readNPLatent>] [-l <lora.safetensors>] [-a <alpha>] [-h <help>] [-m <modelPath>] [-t <modelType>] [--guidanceScale <guidanceScale>] [--dynamic]
+./build/stable_diffusion [-p <posPrompt>] [-n <negPrompt>] [-s <seed>] [--height <output image>] [--width <output image>] [-d <device>] [-r <readNPLatent>] [-l <lora.safetensors>] [-a <alpha>] [-h <help>] [-m <modelPath>] [--guidanceScale <guidanceScale>] [--dynamic]
 
 Usage:
   stable_diffusion [OPTION...]
@@ -131,7 +131,6 @@ Usage:
 * `-c, --useCache`      Use model caching
 * `-r, --readNPLatent`  Read numpy generated latents from file
 * `-m, --modelPath arg` Specify path of SD model IR (default: ../models/dreamlike_anime_1_0_ov)
-* `-t, --type arg`      Specify the type of SD model IRs (FP32, FP16 or INT8) (default: FP16)
 * `--dynamic`           Specify the model input shape to use dynamic shape
 * `-l, --loraPath arg`  Specify path of lora file. (*.safetensors). (default: )
 * `-a, --alpha arg`     alpha for lora (default: 0.75)
@@ -156,7 +155,7 @@ To read the numpy latent instead of C++ std lib for the alignment with Python pi
 
    ![](./soulcard_lora.bmp)
 
-* Generate different size image with dynamic model (C++ lib generated latent): `./build/stable_diffusion -m ./models/dreamlike_anime_1_0_ov -t FP16 --dynamic --height 448 --width 704`
+* Generate different size image with dynamic model (C++ lib generated latent): `./build/stable_diffusion -m ./models/dreamlike_anime_1_0_ov/FP16 --dynamic --height 448 --width 704`
 
    ![](./704x448.bmp)
 
