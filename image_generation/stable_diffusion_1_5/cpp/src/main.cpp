@@ -11,6 +11,8 @@
 #include "cxxopts.hpp"
 #include "imwrite.hpp"
 #include "lora.hpp"
+
+#include "openvino/genai/tokenizer.hpp"
 #include "openvino/core/preprocess/pre_post_process.hpp"
 #include "openvino/pass/manager.hpp"
 #include "openvino/runtime/core.hpp"
@@ -63,10 +65,10 @@ ov::Tensor randn_tensor(ov::Shape shape, bool use_np_latents, uint32_t seed = 42
 }
 
 struct StableDiffusionModels {
+    ov::genai::Tokenizer tokenizer;
     ov::CompiledModel text_encoder;
     ov::CompiledModel unet;
     ov::CompiledModel vae_decoder;
-    ov::CompiledModel tokenizer;
 };
 
 void apply_lora(std::shared_ptr<ov::Model> model, InsertLoRA::LoRAMap& lora_map) {
@@ -145,8 +147,6 @@ StableDiffusionModels compile_models(const std::string& model_path,
     if (use_cache)
         core.set_property(ov::cache_dir("./cache_dir"));
 
-    core.add_extension(TOKENIZERS_LIBRARY_PATH);
-
     // read LoRA weights
     std::map<std::string, InsertLoRA::LoRAMap> lora_weights;
     if (!lora_path.empty()) {
@@ -158,7 +158,7 @@ StableDiffusionModels compile_models(const std::string& model_path,
     {
         Timer t("Loading and compiling tokenizer");
         // Tokenizer model wil be loaded to CPU: OpenVINO Tokenizers can be inferred on a CPU device only.
-        models.tokenizer = core.compile_model(model_path + "/tokenizer/openvino_tokenizer.xml", "CPU");
+        models.tokenizer = ov::genai::Tokenizer(model_path + "/tokenizer");
     }
 
     // Text encoder
@@ -201,21 +201,18 @@ StableDiffusionModels compile_models(const std::string& model_path,
 
 ov::Tensor text_encoder(StableDiffusionModels models, std::string& pos_prompt, std::string& neg_prompt, bool do_classifier_free_guidance) {
     const size_t HIDDEN_SIZE = static_cast<size_t>(models.text_encoder.output(0).get_partial_shape()[2].get_length());
-    const int32_t EOS_TOKEN_ID = 49407, PAD_TOKEN_ID = EOS_TOKEN_ID;
+    const int32_t pad_token_id = models.tokenizer.get_pad_token_id();
     const size_t text_embedding_batch_size = do_classifier_free_guidance ? 2 : 1;
     const ov::Shape input_ids_shape({1, TOKENIZER_MODEL_MAX_LENGTH});
 
-    ov::InferRequest tokenizer_req = models.tokenizer.create_infer_request();
     ov::InferRequest text_encoder_req = models.text_encoder.create_infer_request();
 
     auto compute_text_embeddings = [&](std::string& prompt, ov::Tensor encoder_output_tensor) {
         ov::Tensor input_ids(ov::element::i32, input_ids_shape);
-        std::fill_n(input_ids.data<int32_t>(), input_ids.get_size(), PAD_TOKEN_ID);
+        std::fill_n(input_ids.data<int32_t>(), input_ids.get_size(), pad_token_id);
 
         // tokenization
-        tokenizer_req.set_input_tensor(ov::Tensor{ov::element::string, {1}, &prompt});
-        tokenizer_req.infer();
-        ov::Tensor input_ids_token = tokenizer_req.get_tensor("input_ids");
+        ov::Tensor input_ids_token = models.tokenizer.encode(prompt).input_ids;
         std::copy_n(input_ids_token.data<std::int64_t>(), input_ids_token.get_size(), input_ids.data<std::int32_t>());
 
         // text embeddings

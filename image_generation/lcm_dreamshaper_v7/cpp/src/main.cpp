@@ -218,7 +218,7 @@ ov::Tensor text_encoder(StableDiffusionModels models, std::string& pos_prompt) {
     return text_embeddings;
 }
 
-ov::Tensor get_w_embedding(float guidance_scale = 7.5, uint32_t embedding_dim = 512) {
+ov::Tensor get_guidance_scale_embedding(float guidance_scale = 7.5, uint32_t embedding_dim = 512) {
     float w = guidance_scale * 1000;
     uint32_t half_dim = embedding_dim / 2;
     float emb = log(10000) / (half_dim - 1);
@@ -367,15 +367,15 @@ int32_t main(int32_t argc, char* argv[]) try {
         // https://huggingface.co/docs/diffusers/api/pipelines/latent_consistency_models#diffusers.LatentConsistencyModelPipeline
         ov::Tensor text_embeddings = text_encoder(models, positive_prompt);
 
-        std::shared_ptr<Scheduler> scheduler = std::make_shared<LCMScheduler>(LCMScheduler(
+        std::shared_ptr<Scheduler> scheduler = std::make_shared<LCMScheduler>(
             1000, 0.00085f, 0.012f, BetaSchedule::SCALED_LINEAR,
             PredictionType::EPSILON, {}, 50, true, 10.0f, false,
-            false, 1.0f, 0.995f, 1.0f, read_np_latent, user_seed));
+            false, 1.0f, 0.995f, 1.0f, read_np_latent, user_seed);
         scheduler->set_timesteps(num_inference_steps);
         std::vector<std::int64_t> timesteps = scheduler->get_timesteps();
 
         const size_t unet_time_cond_proj_dim = static_cast<size_t>(models.unet.input("timestep_cond").get_partial_shape()[1].get_length());
-        ov::Tensor guidance_scale_embedding = get_w_embedding(guidance_scale, unet_time_cond_proj_dim);
+        ov::Tensor guidance_scale_embedding = get_guidance_scale_embedding(guidance_scale, unet_time_cond_proj_dim);
 
         const size_t unet_in_channels = static_cast<size_t>(sample_shape[1].get_length());
         ov::Shape latent_model_input_shape = ov::Shape({1, unet_in_channels, height / VAE_SCALE_FACTOR, width / VAE_SCALE_FACTOR});
@@ -383,7 +383,7 @@ int32_t main(int32_t argc, char* argv[]) try {
         ov::Tensor denoised(ov::element::f32, latent_model_input_shape);
 
         for (uint32_t n = 0; n < num_images; n++) {
-            std::uint32_t seed = num_images == 1 ? user_seed: user_seed + n;
+            std::uint32_t seed = user_seed + n;
             ov::Tensor latent_model_input = randn_tensor(latent_model_input_shape, read_np_latent, seed);
 
             for (size_t inference_step = 0; inference_step < num_inference_steps; inference_step++) {

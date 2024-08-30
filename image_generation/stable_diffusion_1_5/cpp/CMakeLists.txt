@@ -33,7 +33,6 @@ FetchContent_MakeAvailable(cxxopts)
 
 add_subdirectory(../../common/imwrite _deps/imwrite)
 add_subdirectory(../../common/diffusers _deps/diffusers)
-add_subdirectory(../../../thirdparty/openvino_tokenizers/ _deps/tokenizers)
 
 # create executable
 
@@ -44,11 +43,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${EIGEN3_INCLUDE_DIR})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    openvino::runtime
+    openvino::genai
     cxxopts::cxxopts
     diffusers::diffusers
     imwrite::imwrite)
-
-add_dependencies(${PROJECT_NAME} openvino_tokenizers)
-
-target_compile_definitions(${PROJECT_NAME} PRIVATE TOKENIZERS_LIBRARY_PATH=\"$<TARGET_FILE:openvino_tokenizers>\")

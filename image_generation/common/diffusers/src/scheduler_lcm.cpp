@@ -196,7 +196,7 @@ std::map<std::string, ov::Tensor> LCMScheduler::step(ov::Tensor noise_pred, ov::
             noise = read_vector_from_txt(noise_file);
         } else {
             noise = randn_function(noise_pred.get_size(), seed);
-        }        
+        }
 
         for (std::size_t i = 0; i < noise_pred.get_size(); ++i) {
             prev_sample_data[i] = alpha_prod_t_prev_sqrt * denoised_data[i] + beta_prod_t_prev_sqrt * noise[i];
