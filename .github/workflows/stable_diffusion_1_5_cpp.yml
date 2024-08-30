@@ -75,7 +75,7 @@ jobs:
         working-directory: ${{ env.WORKING_DIRECTORY }}
         run: |
           source ${{ env.OV_INSTALL_DIR }}/setupvars.sh
-          ./build/stable_diffusion -m ./models/stable_diffusion_v1_5_ov -t FP16
+          ./build/stable_diffusion -m ./models/stable_diffusion_v1_5_ov/FP16
 
   stable_diffusion_1_5_cpp-windows:
       runs-on: windows-latest
@@ -130,4 +130,4 @@ jobs:
           working-directory: ${{ env.WORKING_DIRECTORY }}
           run: |
             . "${{ env.OV_INSTALL_DIR }}/setupvars.ps1"
-            ./build/Release/stable_diffusion.exe -m ./models/stable_diffusion_v1_5_ov -t FP16 --dynamic
+            ./build/Release/stable_diffusion.exe -m ./models/stable_diffusion_v1_5_ov/FP16 --dynamic

@@ -1,16 +1,21 @@
 // Copyright (C) 2023-2024 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-#include <openvino/openvino.hpp>
-#include "openvino/genai/tokenizer.hpp"
-#include "utils.hpp"
+#include <filesystem>
+#include <fstream>
+#include <memory>
+
 #include <jinja2cpp/template.h>
 #include <jinja2cpp/template_env.h>
 #include <jinja2cpp/user_callable.h>
+
+#include <openvino/runtime/core.hpp>
+
+#include "openvino/genai/tokenizer.hpp"
+
+#include "utils.hpp"
 #include "tokenizers_path.hpp"
 #include "circular_buffer_queue.hpp"
-#include <fstream>
-#include <memory>
 
 namespace {
 

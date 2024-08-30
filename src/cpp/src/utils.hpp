@@ -62,8 +62,9 @@ void read_json_param(const nlohmann::json& data, const std::string& name, T& par
 
 template <typename T>
 void read_anymap_param(const ov::AnyMap& config_map, const std::string& name, T& param) {
-    if (config_map.count(name)) {
-        param = config_map.at(name).as<T>();
+    auto it = config_map.find(name);
+    if (it != config_map.end()) {
+        param = it->second.as<T>();
     }
 }
 

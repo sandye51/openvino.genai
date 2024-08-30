@@ -9,6 +9,7 @@
 enum class BetaSchedule {
     LINEAR,
     SCALED_LINEAR,
+    SQUAREDCOS_CAP_V2
 };
 
 enum class PredictionType {

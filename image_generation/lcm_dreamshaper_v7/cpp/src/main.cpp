@@ -320,8 +320,7 @@ int32_t main(int32_t argc, char* argv[]) try {
     const uint32_t width = result["width"].as<size_t>();
     const bool use_cache = result["useCache"].as<bool>();
     const bool read_np_latent = result["readNPLatent"].as<bool>();
-    const std::string model_base_path = result["modelPath"].as<std::string>();
-    const std::string model_type = result["type"].as<std::string>();
+    const std::string model_path = result["modelPath"].as<std::string>();
     const bool use_dynamic_shapes = result["dynamic"].as<bool>();
     const std::string lora_path = result["loraPath"].as<std::string>();
     const float alpha = result["alpha"].as<float>();
@@ -339,16 +338,9 @@ int32_t main(int32_t argc, char* argv[]) try {
     std::cout << "OpenVINO version: " << ov::get_openvino_version() << std::endl;
     std::cout << "Running (may take some time) ..." << std::endl;
 
-    const std::string model_path = model_base_path + "/" + model_type;
-    if (!std::filesystem::exists(model_path)) {
-        std::cerr << "Model IRs for type " << model_type << " don't exist in directory " << model_path << "\n";
-        std::cerr << "Refer to README.md to know how to export OpenVINO model with particular data type." << std::endl;
-        return EXIT_FAILURE;
-    }
-
     // Stable Diffusion pipeline
     const size_t batch_size = 1;
-    StableDiffusionModels models = 
+    StableDiffusionModels models =
         compile_models(model_path, device, lora_path, alpha, use_cache, use_dynamic_shapes, batch_size, height, width);
     ov::InferRequest unet_infer_request = models.unet.create_infer_request();
 
