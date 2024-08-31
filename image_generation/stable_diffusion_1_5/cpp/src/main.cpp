@@ -14,6 +14,9 @@
 
 #include "openvino/genai/tokenizer.hpp"
 #include "openvino/core/preprocess/pre_post_process.hpp"
+#include "openvino/op/clamp.hpp"
+#include "openvino/op/add.hpp"
+#include "openvino/op/multiply.hpp"
 #include "openvino/pass/manager.hpp"
 #include "openvino/runtime/core.hpp"
 #include "scheduler_lms_discrete.hpp"
@@ -64,11 +67,100 @@ ov::Tensor randn_tensor(ov::Shape shape, bool use_np_latents, uint32_t seed = 42
     return noise;
 }
 
+class AutoencoderKL {
+public:
+    struct Config {
+        size_t in_channels = 3;
+        size_t latent_channels = 4;
+        size_t out_channels = 3;
+        float scaling_factor = 0.18215f;
+        std::vector<size_t> block_out_channels = { 64 };
+
+        explicit Config(const std::string& config_path) {
+            // TODO: read values from JSON
+            block_out_channels = { 128, 256, 512, 512 };
+        }
+    };
+
+    explicit AutoencoderKL(const std::string& root_dir)
+        : m_config(root_dir + "/vae_decoder/config.json") {
+        m_model = ov::Core().read_model(root_dir + "/vae_decoder/openvino_model.xml");
+        // apply VaeImageProcessor postprocessing steps by merging them into the VAE decoder model
+        merge_vae_image_processor();
+    }
+
+    AutoencoderKL(const std::string& root_dir,
+                  const std::string& device,
+                  const ov::AnyMap& properties = {})
+        : AutoencoderKL(root_dir) {
+        compile(device, properties);
+    }
+
+    ov::Tensor forward(ov::Tensor latent) {
+        OPENVINO_ASSERT(m_request, "VAE decoder model must be compiled first");
+
+        m_request.set_input_tensor(latent);
+        m_request.infer();
+        return m_request.get_output_tensor();
+    }
+
+    void compile(const std::string& device, const ov::AnyMap& properties = {}) {
+        OPENVINO_ASSERT(m_model, "Model has been already compiled");
+        ov::CompiledModel compiled_model = ov::Core().compile_model(m_model, device, properties);
+        m_request = compiled_model.create_infer_request();
+        // release the original model
+        m_model.reset();
+    }
+
+    void reshape(int64_t height, int64_t width) {
+        OPENVINO_ASSERT(m_model, "Model has been already compiled");
+
+        const size_t vae_scale_factor = std::pow(2, m_config.block_out_channels.size() - 1);
+        const size_t batch_size = 1;
+        height = height / vae_scale_factor;
+        width = width / vae_scale_factor;
+
+        ov::PartialShape input_shape = m_model->input(0).get_partial_shape();
+        std::map<size_t, ov::PartialShape> idx_to_shape{{0, {batch_size, input_shape[1], height, width}}};
+        m_model->reshape(idx_to_shape);
+    }
+
+private:
+    void merge_vae_image_processor() const {
+        ov::preprocess::PrePostProcessor ppp(m_model);
+
+        // scale input before VAE encoder
+        ppp.input().preprocess().scale(m_config.scaling_factor);
+
+        // apply VaeImageProcessor normalization steps
+        // https://github.com/huggingface/diffusers/blob/v0.30.1/src/diffusers/image_processor.py#L159
+        ppp.output().postprocess().custom([](const ov::Output<ov::Node>& port) {
+            auto constant_0_5 = std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{1}, 0.5f);
+            auto constant_255 = std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{1}, 255.0f);
+            auto scaled_0_5 = std::make_shared<ov::op::v1::Multiply>(port, constant_0_5);
+            auto added_0_5 = std::make_shared<ov::op::v1::Add>(scaled_0_5, constant_0_5);
+            auto clamped = std::make_shared<ov::op::v0::Clamp>(added_0_5, 0.0f, 1.0f);
+            return std::make_shared<ov::op::v1::Multiply>(clamped, constant_255);
+        });
+        ppp.output().postprocess().convert_element_type(ov::element::u8);
+        // layout conversion
+        // https://github.com/huggingface/diffusers/blob/v0.30.1/src/diffusers/image_processor.py#L144
+        ppp.output().model().set_layout("NCHW");
+        ppp.output().tensor().set_layout("NHWC");
+
+        ppp.build();
+    }
+
+    Config m_config;
+    ov::InferRequest m_request;
+    std::shared_ptr<ov::Model> m_model;
+};
+
 struct StableDiffusionModels {
     ov::genai::Tokenizer tokenizer;
     ov::CompiledModel text_encoder;
     ov::CompiledModel unet;
-    ov::CompiledModel vae_decoder;
+    std::shared_ptr<AutoencoderKL> vae_decoder;
 };
 
 void apply_lora(std::shared_ptr<ov::Model> model, InsertLoRA::LoRAMap& lora_map) {
@@ -123,15 +215,6 @@ void reshape_unet(std::shared_ptr<ov::Model> model,
     model->reshape(name_to_shape);
 }
 
-void reshape_vae_decoder(std::shared_ptr<ov::Model> model, int64_t height, int64_t width) {
-    height = height / VAE_SCALE_FACTOR;
-    width = width / VAE_SCALE_FACTOR;
-
-    ov::PartialShape input_shape = model->input(0).get_partial_shape();
-    std::map<size_t, ov::PartialShape> idx_to_shape{{0, {1, input_shape[1], height, width}}};
-    model->reshape(idx_to_shape);
-}
-
 StableDiffusionModels compile_models(const std::string& model_path,
                                      const std::string& device,
                                      const std::string& lora_path,
@@ -157,7 +240,7 @@ StableDiffusionModels compile_models(const std::string& model_path,
     // Tokenizer
     {
         Timer t("Loading and compiling tokenizer");
-        // Tokenizer model wil be loaded to CPU: OpenVINO Tokenizers can be inferred on a CPU device only.
+        // Tokenizer model will be loaded to CPU: OpenVINO Tokenizers can be inferred on a CPU device only.
         models.tokenizer = ov::genai::Tokenizer(model_path + "/tokenizer");
     }
 
@@ -186,14 +269,11 @@ StableDiffusionModels compile_models(const std::string& model_path,
     // VAE decoder
     {
         Timer t("Loading and compiling VAE decoder");
-        auto vae_decoder_model = core.read_model(model_path + "/vae_decoder/openvino_model.xml");
+        models.vae_decoder = std::make_shared<AutoencoderKL>(model_path);
         if (!use_dynamic_shapes) {
-            reshape_vae_decoder(vae_decoder_model, height, width);
+            models.vae_decoder->reshape(height, width);
         }
-        ov::preprocess::PrePostProcessor ppp(vae_decoder_model);
-        ppp.output().model().set_layout("NCHW");
-        ppp.output().tensor().set_layout("NHWC");
-        models.vae_decoder = core.compile_model(vae_decoder_model = ppp.build(), device);
+        models.vae_decoder->compile(device);
     }
 
     return models;
@@ -230,7 +310,7 @@ ov::Tensor text_encoder(StableDiffusionModels models, std::string& pos_prompt, s
                                                             {current_batch_idx + 1, TOKENIZER_MODEL_MAX_LENGTH, HIDDEN_SIZE}));
         ++current_batch_idx;
     } else {
-        OPENVINO_ASSERT(neg_prompt.empty(), "Negative prompt is ignored when --guidanceScale < 1.0. Please remove --negPrompt argument.");
+        // Negative prompt is ignored when --guidanceScale < 1.0
     }
 
     compute_text_embeddings(pos_prompt,
@@ -248,31 +328,6 @@ ov::Tensor unet(ov::InferRequest req, ov::Tensor sample, ov::Tensor timestep, ov
     req.infer();
 
     return req.get_output_tensor();
-}
-
-ov::Tensor vae_decoder(ov::CompiledModel& decoder_compiled_model, ov::Tensor sample) {
-    const float coeffs_const{1 / 0.18215};
-    for (size_t i = 0; i < sample.get_size(); ++i)
-        sample.data<float>()[i] *= coeffs_const;
-
-    ov::InferRequest req = decoder_compiled_model.create_infer_request();
-    req.set_input_tensor(sample);
-    req.infer();
-
-    return req.get_output_tensor();
-}
-
-ov::Tensor postprocess_image(ov::Tensor decoded_image) {
-    ov::Tensor generated_image(ov::element::u8, decoded_image.get_shape());
-
-    // convert to u8 image
-    const float* decoded_data = decoded_image.data<const float>();
-    std::uint8_t* generated_data = generated_image.data<std::uint8_t>();
-    for (size_t i = 0; i < decoded_image.get_size(); ++i) {
-        generated_data[i] = static_cast<std::uint8_t>(std::clamp(decoded_data[i] * 0.5f + 0.5f, 0.0f, 1.0f) * 255);
-    }
-
-    return generated_image;
 }
 
 int32_t main(int32_t argc, char* argv[]) try {
@@ -413,9 +468,9 @@ int32_t main(int32_t argc, char* argv[]) try {
                 latent = scheduler->step(noisy_residual, latent, inference_step)["latent"];
             }
 
-            ov::Tensor decoded_image = vae_decoder(models.vae_decoder, latent);
+            ov::Tensor decoded_image = models.vae_decoder->forward(latent);
             result_image_path = std::string("./images/seed_") + std::to_string(seed) + ".bmp";
-            imwrite(result_image_path, postprocess_image(decoded_image), true);
+            imwrite(result_image_path, decoded_image, true);
         }
     }
 
