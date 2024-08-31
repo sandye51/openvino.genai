@@ -21,8 +21,6 @@
 #include "openvino/runtime/core.hpp"
 #include "scheduler_lms_discrete.hpp"
 
-const size_t TOKENIZER_MODEL_MAX_LENGTH = 77;   // 'model_max_length' parameter from 'tokenizer_config.json'
-
 class Timer {
     const decltype(std::chrono::steady_clock::now()) m_start;
 
@@ -131,11 +129,11 @@ public:
         m_model->reshape(idx_to_shape);
     }
 
-    ov::Tensor forward(std::string& pos_prompt, std::string& neg_prompt, bool do_classifier_free_guidance) {
+    ov::Tensor forward(const std::string& pos_prompt, const std::string& neg_prompt, bool do_classifier_free_guidance) {
         const int32_t pad_token_id = m_clip_tokenizer.get_pad_token_id();
         const size_t text_embedding_batch_size = do_classifier_free_guidance ? 2 : 1;
 
-        auto compute_text_embeddings = [&](std::string& prompt, ov::Tensor encoder_output_tensor) {
+        auto compute_text_embeddings = [&](const std::string& prompt, ov::Tensor encoder_output_tensor) {
             ov::Tensor input_ids(ov::element::i32, {1, m_config.max_position_embeddings});
             std::fill_n(input_ids.data<int32_t>(), input_ids.get_size(), pad_token_id);
 
@@ -178,10 +176,13 @@ class UNet2DConditionModel : public IAdaptedModel {
 public:
     struct Config {
         size_t in_channels = 4;
+        size_t sample_size = 0;
         std::vector<size_t> block_out_channels = { 320, 640, 1280, 1280 };
+        int time_cond_proj_dim = -1;
 
         explicit Config(const std::string& config_path) {
             // TODO: read values from JSON
+            sample_size = 96;
         }
     };
 
@@ -207,10 +208,9 @@ public:
         return m_vae_scale_factor;
     }
 
-    void set_hidden_states(ov::Tensor encoder_hidden_states) {
+    void set_hidden_states(const std::string& tensor_name, ov::Tensor encoder_hidden_states) {
         OPENVINO_ASSERT(m_request, "UNet model must be compiled first");
-
-        m_request.set_tensor("encoder_hidden_states", encoder_hidden_states);
+        m_request.set_tensor(tensor_name, encoder_hidden_states);
     }
 
     ov::Tensor forward(ov::Tensor sample, ov::Tensor timestep) {
@@ -354,66 +354,160 @@ private:
     std::shared_ptr<ov::Model> m_model;
 };
 
-struct StableDiffusionModels {
-    ov::genai::Tokenizer tokenizer;
-    std::shared_ptr<CLIPTextModel> clip_text_encoder;
-    std::shared_ptr<UNet2DConditionModel> unet;
-    std::shared_ptr<AutoencoderKL> vae_decoder;
-};
+class StableDiffusionPipeline {
+public:
+    StableDiffusionPipeline(const std::string& root_dir) {
+        // TODO: read all the models from model_index.json
+        m_clip_text_encoder = std::make_shared<CLIPTextModel>(root_dir);
+        m_unet = std::make_shared<UNet2DConditionModel>(root_dir);
+        m_vae_decoder = std::make_shared<AutoencoderKL>(root_dir);
+    }
 
-StableDiffusionModels compile_models(const std::string& model_path,
-                                     const std::string& device,
-                                     const std::string& lora_path,
-                                     const float alpha,
-                                     const bool use_cache,
-                                     const bool use_dynamic_shapes,
-                                     const size_t batch_size,
-                                     const size_t height,
-                                     const size_t width) {
-    StableDiffusionModels models;
+    void reshape(const size_t batch_size, const size_t height, const size_t width) {
+        m_clip_text_encoder->reshape(batch_size);
+        m_unet->reshape(batch_size, height, width, m_clip_text_encoder->get_config().max_position_embeddings);
+        m_vae_decoder->reshape(height, width);
+    }
 
-    ov::AnyMap properties;
-    if (use_cache)
-        properties.insert(ov::cache_dir("./cache_dir"));
+    void compile(const std::string& device, const ov::AnyMap& properties = {}) {
+        m_clip_text_encoder->compile(device, properties);
+        m_unet->compile(device, properties);
+        m_vae_decoder->compile(device, properties);
+    }
 
-    // read LoRA weights
-    std::map<std::string, InsertLoRA::LoRAMap> lora_weights;
-    if (!lora_path.empty()) {
+    void apply_lora(const std::string& lora_path, float alpha) {
         Timer t("Loading and multiplying LoRA weights");
-        lora_weights = read_lora_adapters(lora_path, alpha);
+        std::map<std::string, InsertLoRA::LoRAMap> lora_weights = read_lora_adapters(lora_path, alpha);
+
+        m_clip_text_encoder->apply_lora(lora_weights["text_encoder"]);
+        m_unet->apply_lora(lora_weights["unet"]);
     }
 
-    // Text encoder
-    {
-        Timer t("Loading and compiling text encoder");
-        models.clip_text_encoder = std::make_shared<CLIPTextModel>(model_path);
-        if (!use_dynamic_shapes)
-            models.clip_text_encoder->reshape(batch_size);
-        models.clip_text_encoder->apply_lora(lora_weights["text_encoder"]);
-        models.clip_text_encoder->compile(device, properties);
+    ov::Tensor generate(const std::string& positive_prompt,
+                        const std::string& negative_prompt /* can be empty */,
+                        float guidance_scale = 7.5f,
+                        int64_t height = -1,
+                        int64_t width = -1,
+                        size_t num_inference_steps = 50,
+                        size_t num_images_per_prompt = 1) {
+        Timer t("Running Stable Diffusion pipeline");
+        OPENVINO_ASSERT(num_images_per_prompt == 1, "Currently only num_images_per_prompt = 1 is supported");
+
+        // Stable Diffusion pipeline
+        // see https://huggingface.co/docs/diffusers/using-diffusers/write_own_pipeline#deconstruct-the-stable-diffusion-pipeline
+
+        const size_t batch_size = num_images_per_prompt;
+        const bool do_classifier_free_guidance = guidance_scale > 1.0;
+        const auto& unet_config = m_unet->get_config();
+        const size_t vae_scale_factor = m_unet->get_vae_scale_factor();
+
+        // TODO: drop these variables
+        const bool read_np_latent = false;
+        const size_t user_seed = 42;
+
+        if (height < 0)
+            height = unet_config.sample_size * vae_scale_factor;
+        if (width < 0)
+            width = unet_config.sample_size * vae_scale_factor;
+
+        ov::Tensor encoder_hidden_states = m_clip_text_encoder->forward(positive_prompt, negative_prompt, do_classifier_free_guidance);
+        m_unet->set_hidden_states("encoder_hidden_states", encoder_hidden_states);
+
+        if (unet_config.time_cond_proj_dim >= 0) {
+            ov::Tensor guidance_scale_embedding = get_guidance_scale_embedding(guidance_scale, unet_config.time_cond_proj_dim);
+            m_unet->set_hidden_states("timestep_cond", guidance_scale_embedding);
+        }
+
+        // TODO: pass scheduler externally
+        std::shared_ptr<Scheduler> scheduler = std::make_shared<LMSDiscreteScheduler>();
+        scheduler->set_timesteps(num_inference_steps);
+        std::vector<std::int64_t> timesteps = scheduler->get_timesteps();
+
+        ov::Tensor denoised;
+        for (uint32_t n = 0; n < num_images_per_prompt; n++) {
+            std::uint32_t seed = user_seed + n;
+
+            // latents are multiplied by 'init_noise_sigma'
+            ov::Shape latent_shape = ov::Shape{batch_size, unet_config.in_channels, height / vae_scale_factor, width / vae_scale_factor};
+            ov::Shape latent_shape_cfg = latent_shape;
+            ov::Tensor noise = randn_tensor(latent_shape, read_np_latent, seed);
+            latent_shape_cfg[0] *= do_classifier_free_guidance ? 2 : 1;  // Unet accepts 2x batch in case of CFG
+
+            ov::Tensor latent(ov::element::f32, latent_shape), latent_cfg(ov::element::f32, latent_shape_cfg);
+            for (size_t i = 0; i < noise.get_size(); ++i) {
+                latent.data<float>()[i] = noise.data<float>()[i] * scheduler->get_init_noise_sigma();
+            }
+
+            for (size_t inference_step = 0; inference_step < num_inference_steps; inference_step++) {
+                // concat the same latent twice along a batch dimension in case of CFG
+                latent.copy_to(
+                    ov::Tensor(latent_cfg, {0, 0, 0, 0}, {1, latent_shape[1], latent_shape[2], latent_shape[3]}));
+                if (do_classifier_free_guidance) {
+                    latent.copy_to(
+                        ov::Tensor(latent_cfg, {1, 0, 0, 0}, {2, latent_shape[1], latent_shape[2], latent_shape[3]}));
+                }
+
+                scheduler->scale_model_input(latent_cfg, inference_step);
+
+                ov::Tensor timestep(ov::element::i64, {1}, &timesteps[inference_step]);
+                ov::Tensor noise_pred_tensor = m_unet->forward(latent_cfg, timestep);
+
+                ov::Shape noise_pred_shape = noise_pred_tensor.get_shape();
+                noise_pred_shape[0] = batch_size;
+
+                ov::Tensor noisy_residual(noise_pred_tensor.get_element_type(), noise_pred_shape);
+
+                if (do_classifier_free_guidance) {
+                    // perform guidance
+                    const float* noise_pred_uncond = noise_pred_tensor.data<const float>();
+                    const float* noise_pred_text = noise_pred_uncond + ov::shape_size(noise_pred_shape);
+
+                    for (size_t i = 0; i < ov::shape_size(noise_pred_shape); ++i) {
+                        noisy_residual.data<float>()[i] =
+                            noise_pred_uncond[i] + guidance_scale * (noise_pred_text[i] - noise_pred_uncond[i]);
+                    }
+                } else {
+                    noisy_residual = noise_pred_tensor;
+                }
+
+                auto scheduler_step_result = scheduler->step(noisy_residual, latent, inference_step);
+                latent = scheduler_step_result["latent"];
+
+                // check whether scheduler returns "denoised" image, which should be passed to VAE decoder
+                const auto it = scheduler_step_result.find("denoised");
+                denoised = it != scheduler_step_result.end() ? it->second : latent;
+            }
+        }
+
+        return m_vae_decoder->forward(denoised);
     }
 
-    // UNet
-    {
-        Timer t("Loading and compiling UNet");
-        models.unet = std::make_shared<UNet2DConditionModel>(model_path);
-        if (!use_dynamic_shapes)
-            models.unet->reshape(batch_size, height, width, models.clip_text_encoder->get_config().max_position_embeddings);
-        models.unet->apply_lora(lora_weights["unet"]);
-        models.unet->compile(device, properties);
+private:
+    ov::Tensor get_guidance_scale_embedding(float guidance_scale, uint32_t embedding_dim) {
+        float w = guidance_scale * 1000;
+        uint32_t half_dim = embedding_dim / 2;
+        float emb = log(10000) / (half_dim - 1);
+
+        ov::Shape embedding_shape = {1, embedding_dim};
+        ov::Tensor w_embedding(ov::element::f32, embedding_shape);
+        float* w_embedding_data = w_embedding.data<float>();
+
+        for (size_t i = 0; i < half_dim; ++i) {
+            float temp = std::exp((i * (-emb))) * w;
+            w_embedding_data[i] = std::sin(temp);
+            w_embedding_data[i + half_dim] = std::cos(temp);
+        }
+
+        if (embedding_dim % 2 == 1)
+            w_embedding_data[embedding_dim - 1] = 0;
+
+        return w_embedding;
     }
 
-    // VAE decoder
-    {
-        Timer t("Loading and compiling VAE decoder");
-        models.vae_decoder = std::make_shared<AutoencoderKL>(model_path);
-        if (!use_dynamic_shapes)
-            models.vae_decoder->reshape(height, width);
-        models.vae_decoder->compile(device, properties);
-    }
-
-    return models;
-}
+    std::shared_ptr<CLIPTextModel> m_clip_text_encoder;
+    std::shared_ptr<UNet2DConditionModel> m_unet;
+    std::shared_ptr<AutoencoderKL> m_vae_decoder;
+};
 
 int32_t main(int32_t argc, char* argv[]) try {
     cxxopts::Options options("stable_diffusion", "Stable Diffusion implementation in C++ using OpenVINO\n");
@@ -455,20 +549,20 @@ int32_t main(int32_t argc, char* argv[]) try {
     const uint32_t num_inference_steps = result["step"].as<size_t>();
     const uint32_t user_seed = result["seed"].as<size_t>();
     const float guidance_scale = result["guidanceScale"].as<float>();
-    const uint32_t num_images = result["num"].as<size_t>();
+    const uint32_t num_images_per_prompt = result["num"].as<size_t>();
     const uint32_t height = result["height"].as<size_t>();
     const uint32_t width = result["width"].as<size_t>();
     const bool use_cache = result["useCache"].as<bool>();
     const bool read_np_latent = result["readNPLatent"].as<bool>();
-    const std::string model_path = result["modelPath"].as<std::string>();
+    const std::string models_path = result["modelPath"].as<std::string>();
     const bool use_dynamic_shapes = result["dynamic"].as<bool>();
     const std::string lora_path = result["loraPath"].as<std::string>();
     const float alpha = result["alpha"].as<float>();
 
     OPENVINO_ASSERT(
-        !read_np_latent || (read_np_latent && (num_images == 1)),
+        !read_np_latent || (read_np_latent && (num_images_per_prompt == 1)),
         "\"readNPLatent\" option is only supported for one output image. Number of image output was set to " +
-            std::to_string(num_images));
+            std::to_string(num_images_per_prompt));
 
     const std::string folder_name = "images";
     try {
@@ -479,83 +573,25 @@ int32_t main(int32_t argc, char* argv[]) try {
 
     std::cout << "OpenVINO version: " << ov::get_openvino_version() << std::endl;
 
-    const size_t batch_size = 1;
-    const bool do_classifier_free_guidance = guidance_scale > 1.0;
+    ov::AnyMap properties;
+    if (use_cache)
+        properties.insert(ov::cache_dir("./cache_dir"));
 
-    StableDiffusionModels models =
-        compile_models(model_path, device, lora_path, alpha, use_cache, use_dynamic_shapes, batch_size, height, width);
+    StableDiffusionPipeline pipe(models_path);
+    if (!use_dynamic_shapes)
+        pipe.reshape(num_images_per_prompt, height, width);
+    pipe.compile(device, properties);
 
-    std::string result_image_path;
-
-    // Stable Diffusion pipeline
-    // see https://huggingface.co/docs/diffusers/using-diffusers/write_own_pipeline#deconstruct-the-stable-diffusion-pipeline
     {
-        Timer t("Running Stable Diffusion pipeline");
+        ov::Tensor generated_images = pipe.generate(positive_prompt, negative_prompt, guidance_scale,
+            height, width, num_inference_steps, num_images_per_prompt);
 
-        ov::Tensor encoder_hidden_states = models.clip_text_encoder->forward(positive_prompt, negative_prompt, do_classifier_free_guidance);
-        models.unet->set_hidden_states(encoder_hidden_states);
-
-        std::shared_ptr<Scheduler> scheduler = std::make_shared<LMSDiscreteScheduler>();
-        scheduler->set_timesteps(num_inference_steps);
-        std::vector<std::int64_t> timesteps = scheduler->get_timesteps();
-
-        for (uint32_t n = 0; n < num_images; n++) {
-            std::uint32_t seed = user_seed + n;
-
-            const auto& unet_config = models.unet->get_config();
-            const size_t unet_in_channels = unet_config.in_channels;
-            const size_t vae_scale_factor = models.unet->get_vae_scale_factor();
-
-            // latents are multiplied by 'init_noise_sigma'
-            ov::Shape latent_shape = ov::Shape{batch_size, unet_config.in_channels, height / vae_scale_factor, width / vae_scale_factor};
-            ov::Shape latent_shape_cfg = latent_shape;
-            ov::Tensor noise = randn_tensor(latent_shape, read_np_latent, seed);
-            latent_shape_cfg[0] *= do_classifier_free_guidance ? 2 : 1;  // Unet accepts 2x batch in case of CFG
-            ov::Tensor latent(ov::element::f32, latent_shape), latent_cfg(ov::element::f32, latent_shape_cfg);
-            for (size_t i = 0; i < noise.get_size(); ++i) {
-                latent.data<float>()[i] = noise.data<float>()[i] * scheduler->get_init_noise_sigma();
-            }
-
-            for (size_t inference_step = 0; inference_step < num_inference_steps; inference_step++) {
-                // concat the same latent twice along a batch dimension in case of CFG
-                latent.copy_to(
-                    ov::Tensor(latent_cfg, {0, 0, 0, 0}, {1, latent_shape[1], latent_shape[2], latent_shape[3]}));
-                if (do_classifier_free_guidance) {
-                    latent.copy_to(
-                        ov::Tensor(latent_cfg, {1, 0, 0, 0}, {2, latent_shape[1], latent_shape[2], latent_shape[3]}));
-                }
-
-                scheduler->scale_model_input(latent_cfg, inference_step);
-
-                ov::Tensor timestep(ov::element::i64, {1}, &timesteps[inference_step]);
-                ov::Tensor noise_pred_tensor = models.unet->forward(latent_cfg, timestep);
-
-                ov::Shape noise_pred_shape = noise_pred_tensor.get_shape();
-                noise_pred_shape[0] = batch_size;
-
-                ov::Tensor noisy_residual(noise_pred_tensor.get_element_type(), noise_pred_shape);
-
-                if (do_classifier_free_guidance) {
-                    // perform guidance
-                    const float* noise_pred_uncond = noise_pred_tensor.data<const float>();
-                    const float* noise_pred_text = noise_pred_uncond + ov::shape_size(noise_pred_shape);
-                    for (size_t i = 0; i < ov::shape_size(noise_pred_shape); ++i)
-                        noisy_residual.data<float>()[i] =
-                            noise_pred_uncond[i] + guidance_scale * (noise_pred_text[i] - noise_pred_uncond[i]);
-                } else {
-                    noisy_residual = noise_pred_tensor;
-                }
-
-                latent = scheduler->step(noisy_residual, latent, inference_step)["latent"];
-            }
-
-            ov::Tensor decoded_image = models.vae_decoder->forward(latent);
-            result_image_path = std::string("./images/seed_") + std::to_string(seed) + ".bmp";
-            imwrite(result_image_path, decoded_image, true);
+        for (size_t n = 0; n < num_images_per_prompt; ++n) {
+            ov::Tensor generated_image(generated_images, { n, 0, 0, 0 }, { n + 1, height, width, 3 });
+            std::string result_image_path = "./images/seed_" + std::to_string(n) + ".bmp";
+            imwrite(result_image_path, generated_image, true);
         }
     }
-
-    std::cout << "Result image is saved to: " << result_image_path << std::endl;
 
     return EXIT_SUCCESS;
 } catch (const std::exception& error) {
