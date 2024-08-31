@@ -22,7 +22,6 @@
 #include "scheduler_lms_discrete.hpp"
 
 const size_t TOKENIZER_MODEL_MAX_LENGTH = 77;   // 'model_max_length' parameter from 'tokenizer_config.json'
-const size_t VAE_SCALE_FACTOR = 8;
 
 class Timer {
     const decltype(std::chrono::steady_clock::now()) m_start;
@@ -66,6 +65,204 @@ ov::Tensor randn_tensor(ov::Shape shape, bool use_np_latents, uint32_t seed = 42
     }
     return noise;
 }
+
+class IAdaptedModel {
+public:
+    explicit IAdaptedModel(const std::string& model_path) {
+        m_model = ov::Core().read_model(model_path);
+    }
+
+    void apply_lora(InsertLoRA::LoRAMap& lora_map) {
+        if (!lora_map.empty()) {
+            ov::pass::Manager manager;
+            manager.register_pass<InsertLoRA>(lora_map);
+            manager.run_passes(m_model);
+        }
+    }
+
+    void compile(const std::string& device, const ov::AnyMap& properties = {}) {
+        OPENVINO_ASSERT(m_model, "Model has been already compiled");
+        ov::CompiledModel compiled_model = ov::Core().compile_model(m_model, device, properties);
+        m_request = compiled_model.create_infer_request();
+        // release the original model
+        m_model.reset();
+    }
+
+protected:
+    std::shared_ptr<ov::Model> m_model;
+    ov::InferRequest m_request;
+};
+
+class CLIPTextModel : public IAdaptedModel {
+public:
+    struct Config {
+        // TODO: is it better to use tokenizer max length?
+        size_t max_position_embeddings = 77;
+        size_t projection_dim = 512;
+
+        explicit Config(const std::string& config_path) {
+            // TODO: read from config
+            projection_dim = 768;
+        }
+    };
+
+    explicit CLIPTextModel(const std::string root_dir) :
+        IAdaptedModel(root_dir + "/text_encoder/openvino_model.xml"),
+        m_clip_tokenizer(root_dir + "/tokenizer"),
+        m_config(root_dir + "/text_encoder/config.json") {
+    }
+
+    CLIPTextModel(const std::string& root_dir,
+                  const std::string& device,
+                  const ov::AnyMap& properties) :
+        CLIPTextModel(root_dir) {
+        compile(device, properties);
+    }
+
+    const Config& get_config() const {
+        return m_config;
+    }
+
+    void reshape(size_t batch_size) {
+        ov::PartialShape input_shape = m_model->input(0).get_partial_shape();
+        input_shape[0] = batch_size;
+        input_shape[1] = m_config.max_position_embeddings;
+        std::map<size_t, ov::PartialShape> idx_to_shape{{0, input_shape}};
+        m_model->reshape(idx_to_shape);
+    }
+
+    ov::Tensor forward(std::string& pos_prompt, std::string& neg_prompt, bool do_classifier_free_guidance) {
+        const int32_t pad_token_id = m_clip_tokenizer.get_pad_token_id();
+        const size_t text_embedding_batch_size = do_classifier_free_guidance ? 2 : 1;
+
+        auto compute_text_embeddings = [&](std::string& prompt, ov::Tensor encoder_output_tensor) {
+            ov::Tensor input_ids(ov::element::i32, {1, m_config.max_position_embeddings});
+            std::fill_n(input_ids.data<int32_t>(), input_ids.get_size(), pad_token_id);
+
+            // tokenization
+            ov::Tensor input_ids_token = m_clip_tokenizer.encode(prompt).input_ids;
+            std::copy_n(input_ids_token.data<std::int64_t>(), input_ids_token.get_size(), input_ids.data<std::int32_t>());
+
+            // text embeddings
+            m_request.set_tensor("input_ids", input_ids);
+            m_request.set_output_tensor(0, encoder_output_tensor);
+            m_request.infer();
+        };
+
+        ov::Tensor text_embeddings(ov::element::f32, {text_embedding_batch_size, m_config.max_position_embeddings, m_config.projection_dim});
+
+        size_t current_batch_idx = 0;
+        if (do_classifier_free_guidance) {
+            compute_text_embeddings(neg_prompt,
+                                    ov::Tensor(text_embeddings, {current_batch_idx, 0, 0},
+                                                                {current_batch_idx + 1, m_config.max_position_embeddings, m_config.projection_dim}));
+            ++current_batch_idx;
+        } else {
+            // Negative prompt is ignored when --guidanceScale < 1.0
+        }
+
+        compute_text_embeddings(pos_prompt,
+                                ov::Tensor(text_embeddings, {current_batch_idx, 0, 0},
+                                                            {current_batch_idx + 1, m_config.max_position_embeddings, m_config.projection_dim}));
+
+        return text_embeddings;
+    }
+
+private:
+    ov::genai::Tokenizer m_clip_tokenizer;
+    Config m_config;
+};
+
+class UNet2DConditionModel : public IAdaptedModel {
+
+public:
+    struct Config {
+        size_t in_channels = 4;
+        std::vector<size_t> block_out_channels = { 320, 640, 1280, 1280 };
+
+        explicit Config(const std::string& config_path) {
+            // TODO: read values from JSON
+        }
+    };
+
+    explicit UNet2DConditionModel(const std::string root_dir) :
+        IAdaptedModel(root_dir + "/unet/openvino_model.xml"),
+        m_config(root_dir + "/unet/config.json") {
+        // compute VAE scale factor
+        m_vae_scale_factor = std::pow(2, m_config.block_out_channels.size() - 1);
+    }
+
+    UNet2DConditionModel(const std::string& root_dir,
+                         const std::string& device,
+                         const ov::AnyMap& properties) :
+        UNet2DConditionModel(root_dir) {
+        compile(device, properties);
+    }
+
+    const Config& get_config() const {
+        return m_config;
+    }
+
+    size_t get_vae_scale_factor() const {
+        return m_vae_scale_factor;
+    }
+
+    void set_hidden_states(ov::Tensor encoder_hidden_states) {
+        OPENVINO_ASSERT(m_request, "UNet model must be compiled first");
+
+        m_request.set_tensor("encoder_hidden_states", encoder_hidden_states);
+    }
+
+    ov::Tensor forward(ov::Tensor sample, ov::Tensor timestep) {
+        OPENVINO_ASSERT(m_request, "UNet model must be compiled first");
+
+        m_request.set_tensor("sample", sample);
+        m_request.set_tensor("timestep", timestep);
+
+        m_request.infer();
+
+        return m_request.get_output_tensor();
+    }
+
+    void reshape(int64_t batch_size, int64_t height, int64_t width, int64_t tokenizer_model_max_length) {
+        OPENVINO_ASSERT(m_model, "Model has been already compiled");
+
+        // TODO: what if it's disabled?
+        // The factor of 2 comes from the guidance scale > 1
+        for (auto input : m_model->inputs()) {
+            if (input.get_any_name().find("timestep_cond") == std::string::npos) {
+                batch_size *= 2;
+                break;
+            }
+        }
+
+        height /= m_vae_scale_factor;
+        width /= m_vae_scale_factor;
+
+        std::map<std::string, ov::PartialShape> name_to_shape;
+
+        for (auto && input : m_model->inputs()) {
+            std::string input_name = input.get_any_name();
+            name_to_shape[input_name] = input.get_partial_shape();
+            if (input_name == "timestep") {
+                name_to_shape[input_name][0] = 1;
+            } else if (input_name == "sample") {
+                name_to_shape[input_name] = {batch_size, name_to_shape[input_name][1], height, width};
+            } else if (input_name == "time_ids") {
+                name_to_shape[input_name][0] = batch_size;
+            } else if (input_name == "encoder_hidden_states") {
+                name_to_shape[input_name][0] = batch_size;
+                name_to_shape[input_name][1] = tokenizer_model_max_length;
+            }
+        }
+
+        m_model->reshape(name_to_shape);
+    }
+
+private:
+    Config m_config;
+    size_t m_vae_scale_factor;
+};
 
 class AutoencoderKL {
 public:
@@ -117,8 +314,9 @@ public:
 
         const size_t vae_scale_factor = std::pow(2, m_config.block_out_channels.size() - 1);
         const size_t batch_size = 1;
-        height = height / vae_scale_factor;
-        width = width / vae_scale_factor;
+
+        height /= vae_scale_factor;
+        width /= vae_scale_factor;
 
         ov::PartialShape input_shape = m_model->input(0).get_partial_shape();
         std::map<size_t, ov::PartialShape> idx_to_shape{{0, {batch_size, input_shape[1], height, width}}};
@@ -158,62 +356,10 @@ private:
 
 struct StableDiffusionModels {
     ov::genai::Tokenizer tokenizer;
-    ov::CompiledModel text_encoder;
-    ov::CompiledModel unet;
+    std::shared_ptr<CLIPTextModel> clip_text_encoder;
+    std::shared_ptr<UNet2DConditionModel> unet;
     std::shared_ptr<AutoencoderKL> vae_decoder;
 };
-
-void apply_lora(std::shared_ptr<ov::Model> model, InsertLoRA::LoRAMap& lora_map) {
-    if (!lora_map.empty()) {
-        ov::pass::Manager manager;
-        manager.register_pass<InsertLoRA>(lora_map);
-        manager.run_passes(model);
-    }
-}
-
-void reshape_text_encoder(std::shared_ptr<ov::Model> model, size_t batch_size, size_t tokenizer_model_max_length) {
-    ov::PartialShape input_shape = model->input(0).get_partial_shape();
-    input_shape[0] = batch_size;
-    input_shape[1] = tokenizer_model_max_length;
-    std::map<size_t, ov::PartialShape> idx_to_shape{{0, input_shape}};
-    model->reshape(idx_to_shape);
-}
-
-void reshape_unet(std::shared_ptr<ov::Model> model,
-                  int64_t batch_size,
-                  int64_t height,
-                  int64_t width,
-                  int64_t tokenizer_model_max_length) {
-    // The factor of 2 comes from the guidance scale > 1
-    for (auto input : model->inputs()) {
-        if (input.get_any_name().find("timestep_cond") == std::string::npos) {
-            batch_size *= 2;
-            break;
-        }
-    }
-
-    height = height / VAE_SCALE_FACTOR;
-    width = width / VAE_SCALE_FACTOR;
-
-    std::map<std::string, ov::PartialShape> name_to_shape;
-
-    for (auto input : model->inputs()) {
-        std::string input_name = input.get_any_name();
-        name_to_shape[input_name] = input.get_partial_shape();
-        if (input_name == "timestep") {
-            name_to_shape[input_name][0] = 1;
-        } else if (input_name == "sample") {
-            name_to_shape[input_name] = {batch_size, name_to_shape[input_name][1], height, width};
-        } else if (input_name == "time_ids") {
-            name_to_shape[input_name][0] = batch_size;
-        } else {
-            name_to_shape[input_name][0] = batch_size;
-            name_to_shape[input_name][1] = TOKENIZER_MODEL_MAX_LENGTH;
-        }
-    }
-
-    model->reshape(name_to_shape);
-}
 
 StableDiffusionModels compile_models(const std::string& model_path,
                                      const std::string& device,
@@ -226,9 +372,9 @@ StableDiffusionModels compile_models(const std::string& model_path,
                                      const size_t width) {
     StableDiffusionModels models;
 
-    ov::Core core;
+    ov::AnyMap properties;
     if (use_cache)
-        core.set_property(ov::cache_dir("./cache_dir"));
+        properties.insert(ov::cache_dir("./cache_dir"));
 
     // read LoRA weights
     std::map<std::string, InsertLoRA::LoRAMap> lora_weights;
@@ -237,97 +383,36 @@ StableDiffusionModels compile_models(const std::string& model_path,
         lora_weights = read_lora_adapters(lora_path, alpha);
     }
 
-    // Tokenizer
-    {
-        Timer t("Loading and compiling tokenizer");
-        // Tokenizer model will be loaded to CPU: OpenVINO Tokenizers can be inferred on a CPU device only.
-        models.tokenizer = ov::genai::Tokenizer(model_path + "/tokenizer");
-    }
-
     // Text encoder
     {
         Timer t("Loading and compiling text encoder");
-        auto text_encoder_model = core.read_model(model_path + "/text_encoder/openvino_model.xml");
-        if (!use_dynamic_shapes) {
-            reshape_text_encoder(text_encoder_model, batch_size, TOKENIZER_MODEL_MAX_LENGTH);
-        }
-        apply_lora(text_encoder_model, lora_weights["text_encoder"]);
-        models.text_encoder = core.compile_model(text_encoder_model, device);
+        models.clip_text_encoder = std::make_shared<CLIPTextModel>(model_path);
+        if (!use_dynamic_shapes)
+            models.clip_text_encoder->reshape(batch_size);
+        models.clip_text_encoder->apply_lora(lora_weights["text_encoder"]);
+        models.clip_text_encoder->compile(device, properties);
     }
 
     // UNet
     {
         Timer t("Loading and compiling UNet");
-        auto unet_model = core.read_model(model_path + "/unet/openvino_model.xml");
-        if (!use_dynamic_shapes) {
-            reshape_unet(unet_model, batch_size, height, width, TOKENIZER_MODEL_MAX_LENGTH);
-        }
-        apply_lora(unet_model, lora_weights["unet"]);
-        models.unet = core.compile_model(unet_model, device);
+        models.unet = std::make_shared<UNet2DConditionModel>(model_path);
+        if (!use_dynamic_shapes)
+            models.unet->reshape(batch_size, height, width, models.clip_text_encoder->get_config().max_position_embeddings);
+        models.unet->apply_lora(lora_weights["unet"]);
+        models.unet->compile(device, properties);
     }
 
     // VAE decoder
     {
         Timer t("Loading and compiling VAE decoder");
         models.vae_decoder = std::make_shared<AutoencoderKL>(model_path);
-        if (!use_dynamic_shapes) {
+        if (!use_dynamic_shapes)
             models.vae_decoder->reshape(height, width);
-        }
-        models.vae_decoder->compile(device);
+        models.vae_decoder->compile(device, properties);
     }
 
     return models;
-}
-
-ov::Tensor text_encoder(StableDiffusionModels models, std::string& pos_prompt, std::string& neg_prompt, bool do_classifier_free_guidance) {
-    const size_t HIDDEN_SIZE = static_cast<size_t>(models.text_encoder.output(0).get_partial_shape()[2].get_length());
-    const int32_t pad_token_id = models.tokenizer.get_pad_token_id();
-    const size_t text_embedding_batch_size = do_classifier_free_guidance ? 2 : 1;
-    const ov::Shape input_ids_shape({1, TOKENIZER_MODEL_MAX_LENGTH});
-
-    ov::InferRequest text_encoder_req = models.text_encoder.create_infer_request();
-
-    auto compute_text_embeddings = [&](std::string& prompt, ov::Tensor encoder_output_tensor) {
-        ov::Tensor input_ids(ov::element::i32, input_ids_shape);
-        std::fill_n(input_ids.data<int32_t>(), input_ids.get_size(), pad_token_id);
-
-        // tokenization
-        ov::Tensor input_ids_token = models.tokenizer.encode(prompt).input_ids;
-        std::copy_n(input_ids_token.data<std::int64_t>(), input_ids_token.get_size(), input_ids.data<std::int32_t>());
-
-        // text embeddings
-        text_encoder_req.set_tensor("input_ids", input_ids);
-        text_encoder_req.set_output_tensor(0, encoder_output_tensor);
-        text_encoder_req.infer();
-    };
-
-    ov::Tensor text_embeddings(ov::element::f32, {text_embedding_batch_size, TOKENIZER_MODEL_MAX_LENGTH, HIDDEN_SIZE});
-
-    size_t current_batch_idx = 0;
-    if (do_classifier_free_guidance) {
-        compute_text_embeddings(neg_prompt,
-                                ov::Tensor(text_embeddings, {current_batch_idx, 0, 0},
-                                                            {current_batch_idx + 1, TOKENIZER_MODEL_MAX_LENGTH, HIDDEN_SIZE}));
-        ++current_batch_idx;
-    } else {
-        // Negative prompt is ignored when --guidanceScale < 1.0
-    }
-
-    compute_text_embeddings(pos_prompt,
-                            ov::Tensor(text_embeddings, {current_batch_idx, 0, 0},
-                                                        {current_batch_idx + 1, TOKENIZER_MODEL_MAX_LENGTH, HIDDEN_SIZE}));
-
-    return text_embeddings;
-}
-
-ov::Tensor unet(ov::InferRequest req, ov::Tensor sample, ov::Tensor timestep, ov::Tensor text_embedding_1d) {
-    req.set_tensor("sample", sample);
-    req.set_tensor("timestep", timestep);
-    req.set_tensor("encoder_hidden_states", text_embedding_1d);
-
-    req.infer();
-
-    return req.get_output_tensor();
 }
 
 int32_t main(int32_t argc, char* argv[]) try {
@@ -399,12 +484,6 @@ int32_t main(int32_t argc, char* argv[]) try {
 
     StableDiffusionModels models =
         compile_models(model_path, device, lora_path, alpha, use_cache, use_dynamic_shapes, batch_size, height, width);
-    ov::InferRequest unet_infer_request = models.unet.create_infer_request();
-
-    ov::PartialShape sample_shape = models.unet.input("sample").get_partial_shape();
-    OPENVINO_ASSERT(sample_shape.is_dynamic() ||
-                        (sample_shape[2] * VAE_SCALE_FACTOR == height && sample_shape[3] * VAE_SCALE_FACTOR == width),
-                    "UNet model has static shapes [1, 4, H/8, W/8] or dynamic shapes [?, 4, ?, ?]");
 
     std::string result_image_path;
 
@@ -413,7 +492,8 @@ int32_t main(int32_t argc, char* argv[]) try {
     {
         Timer t("Running Stable Diffusion pipeline");
 
-        ov::Tensor text_embeddings = text_encoder(models, positive_prompt, negative_prompt, do_classifier_free_guidance);
+        ov::Tensor encoder_hidden_states = models.clip_text_encoder->forward(positive_prompt, negative_prompt, do_classifier_free_guidance);
+        models.unet->set_hidden_states(encoder_hidden_states);
 
         std::shared_ptr<Scheduler> scheduler = std::make_shared<LMSDiscreteScheduler>();
         scheduler->set_timesteps(num_inference_steps);
@@ -422,15 +502,16 @@ int32_t main(int32_t argc, char* argv[]) try {
         for (uint32_t n = 0; n < num_images; n++) {
             std::uint32_t seed = user_seed + n;
 
-            const size_t unet_in_channels = static_cast<size_t>(sample_shape[1].get_length());
+            const auto& unet_config = models.unet->get_config();
+            const size_t unet_in_channels = unet_config.in_channels;
+            const size_t vae_scale_factor = models.unet->get_vae_scale_factor();
 
             // latents are multiplied by 'init_noise_sigma'
-            ov::Shape latent_shape = ov::Shape({batch_size, unet_in_channels, height / VAE_SCALE_FACTOR, width / VAE_SCALE_FACTOR});
-            ov::Shape latent_model_input_shape = latent_shape;
+            ov::Shape latent_shape = ov::Shape{batch_size, unet_config.in_channels, height / vae_scale_factor, width / vae_scale_factor};
+            ov::Shape latent_shape_cfg = latent_shape;
             ov::Tensor noise = randn_tensor(latent_shape, read_np_latent, seed);
-            latent_model_input_shape[0] = do_classifier_free_guidance ? 2 : 1;  // Unet accepts batch 2 in case of CFG
-            ov::Tensor latent(ov::element::f32, latent_shape),
-                latent_model_input(ov::element::f32, latent_model_input_shape);
+            latent_shape_cfg[0] *= do_classifier_free_guidance ? 2 : 1;  // Unet accepts 2x batch in case of CFG
+            ov::Tensor latent(ov::element::f32, latent_shape), latent_cfg(ov::element::f32, latent_shape_cfg);
             for (size_t i = 0; i < noise.get_size(); ++i) {
                 latent.data<float>()[i] = noise.data<float>()[i] * scheduler->get_init_noise_sigma();
             }
@@ -438,19 +519,19 @@ int32_t main(int32_t argc, char* argv[]) try {
             for (size_t inference_step = 0; inference_step < num_inference_steps; inference_step++) {
                 // concat the same latent twice along a batch dimension in case of CFG
                 latent.copy_to(
-                    ov::Tensor(latent_model_input, {0, 0, 0, 0}, {1, latent_shape[1], latent_shape[2], latent_shape[3]}));
+                    ov::Tensor(latent_cfg, {0, 0, 0, 0}, {1, latent_shape[1], latent_shape[2], latent_shape[3]}));
                 if (do_classifier_free_guidance) {
                     latent.copy_to(
-                        ov::Tensor(latent_model_input, {1, 0, 0, 0}, {2, latent_shape[1], latent_shape[2], latent_shape[3]}));
+                        ov::Tensor(latent_cfg, {1, 0, 0, 0}, {2, latent_shape[1], latent_shape[2], latent_shape[3]}));
                 }
 
-                scheduler->scale_model_input(latent_model_input, inference_step);
+                scheduler->scale_model_input(latent_cfg, inference_step);
 
                 ov::Tensor timestep(ov::element::i64, {1}, &timesteps[inference_step]);
-                ov::Tensor noise_pred_tensor = unet(unet_infer_request, latent_model_input, timestep, text_embeddings);
+                ov::Tensor noise_pred_tensor = models.unet->forward(latent_cfg, timestep);
 
                 ov::Shape noise_pred_shape = noise_pred_tensor.get_shape();
-                noise_pred_shape[0] = 1;
+                noise_pred_shape[0] = batch_size;
 
                 ov::Tensor noisy_residual(noise_pred_tensor.get_element_type(), noise_pred_shape);
 
