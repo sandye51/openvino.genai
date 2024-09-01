@@ -1,6 +1,8 @@
 // Copyright (C) 2023-2024 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <string>
 
 #include "scheduler.hpp"
@@ -26,6 +28,7 @@ public:
         float timestep_scaling = 10.0f;
         bool rescale_betas_zero_snr = false;
 
+        Config() = default;
         explicit Config(const std::string scheduler_config_path);
     };
 

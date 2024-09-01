@@ -19,7 +19,9 @@
 #include "openvino/op/multiply.hpp"
 #include "openvino/pass/manager.hpp"
 #include "openvino/runtime/core.hpp"
+
 #include "scheduler_lms_discrete.hpp"
+#include "scheduler_lcm.hpp"
 
 class Timer {
     const decltype(std::chrono::steady_clock::now()) m_start;
@@ -183,6 +185,7 @@ public:
         explicit Config(const std::string& config_path) {
             // TODO: read values from JSON
             sample_size = 96;
+            time_cond_proj_dim = 256;
         }
     };
 
@@ -229,12 +232,7 @@ public:
 
         // TODO: what if it's disabled?
         // The factor of 2 comes from the guidance scale > 1
-        for (auto input : m_model->inputs()) {
-            if (input.get_any_name().find("timestep_cond") == std::string::npos) {
-                batch_size *= 2;
-                break;
-            }
-        }
+        batch_size *= m_config.time_cond_proj_dim <= 0 ? 2 : 1;
 
         height /= m_vae_scale_factor;
         width /= m_vae_scale_factor;
@@ -397,8 +395,9 @@ public:
         // see https://huggingface.co/docs/diffusers/using-diffusers/write_own_pipeline#deconstruct-the-stable-diffusion-pipeline
 
         const size_t batch_size = num_images_per_prompt;
-        const bool do_classifier_free_guidance = guidance_scale > 1.0;
         const auto& unet_config = m_unet->get_config();
+        const bool do_classifier_free_guidance = guidance_scale > 1.0 && unet_config.time_cond_proj_dim < 0;
+        const size_t batch_size_multiplier = do_classifier_free_guidance ? 2 : 1;  // Unet accepts 2x batch in case of CFG
         const size_t vae_scale_factor = m_unet->get_vae_scale_factor();
 
         // TODO: drop these variables
@@ -419,7 +418,7 @@ public:
         }
 
         // TODO: pass scheduler externally
-        std::shared_ptr<Scheduler> scheduler = std::make_shared<LMSDiscreteScheduler>();
+        std::shared_ptr<Scheduler> scheduler = std::make_shared<LCMScheduler>(LCMScheduler::Config(), false, 42);
         scheduler->set_timesteps(num_inference_steps);
         std::vector<std::int64_t> timesteps = scheduler->get_timesteps();
 
@@ -431,7 +430,7 @@ public:
             ov::Shape latent_shape = ov::Shape{batch_size, unet_config.in_channels, height / vae_scale_factor, width / vae_scale_factor};
             ov::Shape latent_shape_cfg = latent_shape;
             ov::Tensor noise = randn_tensor(latent_shape, read_np_latent, seed);
-            latent_shape_cfg[0] *= do_classifier_free_guidance ? 2 : 1;  // Unet accepts 2x batch in case of CFG
+            latent_shape_cfg[0] *= batch_size_multiplier;
 
             ov::Tensor latent(ov::element::f32, latent_shape), latent_cfg(ov::element::f32, latent_shape_cfg);
             for (size_t i = 0; i < noise.get_size(); ++i) {
@@ -483,7 +482,7 @@ public:
     }
 
 private:
-    ov::Tensor get_guidance_scale_embedding(float guidance_scale, uint32_t embedding_dim) {
+    static ov::Tensor get_guidance_scale_embedding(float guidance_scale, uint32_t embedding_dim) {
         float w = guidance_scale * 1000;
         uint32_t half_dim = embedding_dim / 2;
         float emb = log(10000) / (half_dim - 1);

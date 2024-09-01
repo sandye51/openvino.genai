@@ -58,7 +58,7 @@ float lms_derivative_function(float tau, int32_t order, int32_t curr_order, cons
     return prod;
 }
 
-}
+}  // namespace
 
 int64_t LMSDiscreteScheduler::_sigma_to_t(float sigma) const {
     double log_sigma = std::log(sigma);
