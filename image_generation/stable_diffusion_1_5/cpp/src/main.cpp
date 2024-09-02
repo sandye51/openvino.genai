@@ -23,6 +23,8 @@
 #include "scheduler_lms_discrete.hpp"
 #include "scheduler_lcm.hpp"
 
+#include "utils.hpp"
+
 class Timer {
     const decltype(std::chrono::steady_clock::now()) m_start;
 
@@ -101,8 +103,14 @@ public:
         size_t projection_dim = 512;
 
         explicit Config(const std::string& config_path) {
-            // TODO: read from config
-            projection_dim = 768;
+            std::ifstream file(config_path);
+            OPENVINO_ASSERT(file.is_open(), "Failed to open ", config_path);
+
+            nlohmann::json data = nlohmann::json::parse(file);
+            using ov::genai::utils::read_json_param;
+
+            read_json_param(data, "max_position_embeddings", max_position_embeddings);
+            read_json_param(data, "projection_dim", projection_dim);
         }
     };
 
@@ -182,9 +190,14 @@ public:
         int time_cond_proj_dim = -1;
 
         explicit Config(const std::string& config_path) {
-            // TODO: read values from JSON
-            sample_size = 96;
-            time_cond_proj_dim = 256;
+            std::ifstream file(config_path);
+            OPENVINO_ASSERT(file.is_open(), "Failed to open ", config_path);
+
+            nlohmann::json data = nlohmann::json::parse(file);
+            using ov::genai::utils::read_json_param;
+
+            read_json_param(data, "sample_size", sample_size);
+            read_json_param(data, "time_cond_proj_dim", time_cond_proj_dim);
         }
     };
 
@@ -271,8 +284,17 @@ public:
         std::vector<size_t> block_out_channels = { 64 };
 
         explicit Config(const std::string& config_path) {
-            // TODO: read values from JSON
-            block_out_channels = { 128, 256, 512, 512 };
+            std::ifstream file(config_path);
+            OPENVINO_ASSERT(file.is_open(), "Failed to open ", config_path);
+
+            nlohmann::json data = nlohmann::json::parse(file);
+            using ov::genai::utils::read_json_param;
+
+            read_json_param(data, "in_channels", in_channels);
+            read_json_param(data, "latent_channels", latent_channels);
+            read_json_param(data, "out_channels", out_channels);
+            read_json_param(data, "scaling_factor", scaling_factor);
+            read_json_param(data, "block_out_channels", block_out_channels);
         }
     };
 
@@ -354,7 +376,9 @@ private:
 class StableDiffusionPipeline {
 public:
     StableDiffusionPipeline(const std::string& root_dir) {
-        // TODO: read all the models from model_index.json
+        const std::string model_index_path = root_dir + "/model_index.json";
+
+        m_scheduler = Scheduler::from_config(root_dir + "/scheduler/scheduler_config.json");
         m_clip_text_encoder = std::make_shared<CLIPTextModel>(root_dir);
         m_unet = std::make_shared<UNet2DConditionModel>(root_dir);
         m_vae_decoder = std::make_shared<AutoencoderKL>(root_dir);
@@ -416,10 +440,8 @@ public:
             m_unet->set_hidden_states("timestep_cond", guidance_scale_embedding);
         }
 
-        // TODO: pass scheduler externally
-        std::shared_ptr<Scheduler> scheduler = std::make_shared<LCMScheduler>(LCMScheduler::Config(), false, 42);
-        scheduler->set_timesteps(num_inference_steps);
-        std::vector<std::int64_t> timesteps = scheduler->get_timesteps();
+        m_scheduler->set_timesteps(num_inference_steps);
+        std::vector<std::int64_t> timesteps = m_scheduler->get_timesteps();
 
         ov::Tensor denoised;
         for (uint32_t n = 0; n < num_images_per_prompt; n++) {
@@ -433,7 +455,7 @@ public:
 
             ov::Tensor latent(ov::element::f32, latent_shape), latent_cfg(ov::element::f32, latent_shape_cfg);
             for (size_t i = 0; i < noise.get_size(); ++i) {
-                latent.data<float>()[i] = noise.data<float>()[i] * scheduler->get_init_noise_sigma();
+                latent.data<float>()[i] = noise.data<float>()[i] * m_scheduler->get_init_noise_sigma();
             }
 
             for (size_t inference_step = 0; inference_step < num_inference_steps; inference_step++) {
@@ -445,7 +467,7 @@ public:
                         ov::Tensor(latent_cfg, {1, 0, 0, 0}, {2, latent_shape[1], latent_shape[2], latent_shape[3]}));
                 }
 
-                scheduler->scale_model_input(latent_cfg, inference_step);
+                m_scheduler->scale_model_input(latent_cfg, inference_step);
 
                 ov::Tensor timestep(ov::element::i64, {1}, &timesteps[inference_step]);
                 ov::Tensor noise_pred_tensor = m_unet->forward(latent_cfg, timestep);
@@ -468,7 +490,7 @@ public:
                     noisy_residual = noise_pred_tensor;
                 }
 
-                auto scheduler_step_result = scheduler->step(noisy_residual, latent, inference_step);
+                auto scheduler_step_result = m_scheduler->step(noisy_residual, latent, inference_step);
                 latent = scheduler_step_result["latent"];
 
                 // check whether scheduler returns "denoised" image, which should be passed to VAE decoder
@@ -502,6 +524,7 @@ private:
         return w_embedding;
     }
 
+    std::shared_ptr<Scheduler> m_scheduler;
     std::shared_ptr<CLIPTextModel> m_clip_text_encoder;
     std::shared_ptr<UNet2DConditionModel> m_unet;
     std::shared_ptr<AutoencoderKL> m_vae_decoder;

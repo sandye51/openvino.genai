@@ -42,8 +42,13 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${EIGEN3_INCLUDE_DIR})
 
+# for utils.hpp
+target_include_directories(${PROJECT_NAME} PRIVATE ../../../src/cpp/src)
+
 target_link_libraries(${PROJECT_NAME} PRIVATE
     openvino::genai
     cxxopts::cxxopts
     diffusers::diffusers
+    # TODO: remove after moving to GenAI
+    nlohmann_json::nlohmann_json
     imwrite::imwrite)

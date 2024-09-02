@@ -44,10 +44,36 @@ namespace genai {
 namespace utils {
 
 template <>
-struct json_type_traits<BetaSchedule> { static constexpr auto json_value_t = nlohmann::json::value_t::string; };
+void read_json_param(const nlohmann::json& data, const std::string& name, BetaSchedule& param) {
+    if (data.contains(name) && data[name].is_string()) {
+        std::string beta_schedule_str = data[name].get<std::string>();
+        if (beta_schedule_str == "linear")
+            param = BetaSchedule::LINEAR;
+        else if (beta_schedule_str == "scaled_linear")
+            param = BetaSchedule::SCALED_LINEAR;
+        else if (beta_schedule_str == "squaredcos_cap_v2")
+            param = BetaSchedule::SQUAREDCOS_CAP_V2;
+        else if (!beta_schedule_str.empty()) {
+            OPENVINO_THROW("Unsupported value for 'beta_schedule' ", beta_schedule_str);
+        }
+    }
+}
 
 template <>
-struct json_type_traits<PredictionType> { static constexpr auto json_value_t = nlohmann::json::value_t::string; };
+void read_json_param(const nlohmann::json& data, const std::string& name, PredictionType& param) {
+    if (data.contains(name) && data[name].is_string()) {
+        std::string prediction_type_str = data[name].get<std::string>();
+        if (prediction_type_str == "epsilon")
+            param = PredictionType::EPSILON;
+        else if (prediction_type_str == "sample")
+            param = PredictionType::SAMPLE;
+        else if (prediction_type_str == "v_prediction")
+            param = PredictionType::V_PREDICTION;
+        else if (!prediction_type_str.empty()) {
+            OPENVINO_THROW("Unsupported value for 'prediction_type' ", prediction_type_str);
+        }
+    }
+}
 
 }  // namespace utils
 }  // namespace genai
@@ -72,37 +98,12 @@ LCMScheduler::Config::Config(const std::string scheduler_config_path) {
     read_json_param(data, "set_alpha_to_one", set_alpha_to_one);
     read_json_param(data, "steps_offset", steps_offset);
     read_json_param(data, "thresholding", thresholding);
+    read_json_param(data, "timestep_scaling", timestep_scaling);
+    read_json_param(data, "trained_betas", trained_betas);
+    read_json_param(data, "beta_schedule", beta_schedule);
+    read_json_param(data, "prediction_type", prediction_type);
+    // not currently used
     // read_json_param(data, "timestep_spacing", timestep_spacing);
-
-    std::string beta_schedule_str;
-    read_json_param(data, "beta_schedule", beta_schedule_str);
-    if (beta_schedule_str == "linear")
-        beta_schedule = BetaSchedule::LINEAR;
-    else if (beta_schedule_str == "scaled_linear")
-        beta_schedule = BetaSchedule::SCALED_LINEAR;
-    else if (beta_schedule_str == "squaredcos_cap_v2")
-        beta_schedule = BetaSchedule::SQUAREDCOS_CAP_V2;
-    else if (!beta_schedule_str.empty()) {
-        OPENVINO_THROW("Unsupported value for 'beta_schedule' ", beta_schedule_str);
-    }
-
-    std::string prediction_type_str;
-    read_json_param(data, "prediction_type", prediction_type_str);
-    if (prediction_type_str == "epsilon")
-        prediction_type = PredictionType::EPSILON;
-    else if (prediction_type_str == "sample")
-        prediction_type = PredictionType::SAMPLE;
-    else if (prediction_type_str == "v_prediction")
-        prediction_type = PredictionType::V_PREDICTION;
-    else if (!prediction_type_str.empty()) {
-        OPENVINO_THROW("Unsupported value for 'prediction_type' ", prediction_type_str);
-    }
-
-    if (data.contains("trained_betas") && !data["trained_betas"].is_null()) {
-        for (const auto & elem : data["trained_betas"]) {
-            trained_betas.push_back(elem);
-        }
-    }
 }
 
 LCMScheduler::LCMScheduler(const std::string scheduler_config_path) :

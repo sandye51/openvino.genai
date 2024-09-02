@@ -22,6 +22,8 @@ enum class PredictionType {
 
 class Scheduler {
 public:
+    static std::shared_ptr<Scheduler> from_config(const std::string& scheduler_config_path);
+
     virtual void set_timesteps(size_t num_inference_steps) = 0;
 
     virtual std::vector<std::int64_t> get_timesteps() const = 0;
