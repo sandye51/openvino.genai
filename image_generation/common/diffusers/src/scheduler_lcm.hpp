@@ -7,7 +7,8 @@
 #include <random>
 #include <vector>
 
-#include "scheduler.hpp"
+#include "types.hpp"
+#include "diffusers/scheduler.hpp"
 
 class LCMScheduler : public Scheduler {
 public:

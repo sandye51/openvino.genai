@@ -8,8 +8,6 @@
 
 #include "scheduler_lcm.hpp"
 
-#include "utils.hpp"
-
 // https://gist.github.com/lorenzoriano/5414671
 template <typename T, typename U>
 std::vector<T> linspace(U start, U end, size_t num, bool endpoint = false) {
@@ -38,46 +36,6 @@ std::vector<float> read_vector_from_txt(std::string& file_name) {
     std::vector<float> res(start, end);
     return res;
 }
-
-namespace ov {
-namespace genai {
-namespace utils {
-
-template <>
-void read_json_param(const nlohmann::json& data, const std::string& name, BetaSchedule& param) {
-    if (data.contains(name) && data[name].is_string()) {
-        std::string beta_schedule_str = data[name].get<std::string>();
-        if (beta_schedule_str == "linear")
-            param = BetaSchedule::LINEAR;
-        else if (beta_schedule_str == "scaled_linear")
-            param = BetaSchedule::SCALED_LINEAR;
-        else if (beta_schedule_str == "squaredcos_cap_v2")
-            param = BetaSchedule::SQUAREDCOS_CAP_V2;
-        else if (!beta_schedule_str.empty()) {
-            OPENVINO_THROW("Unsupported value for 'beta_schedule' ", beta_schedule_str);
-        }
-    }
-}
-
-template <>
-void read_json_param(const nlohmann::json& data, const std::string& name, PredictionType& param) {
-    if (data.contains(name) && data[name].is_string()) {
-        std::string prediction_type_str = data[name].get<std::string>();
-        if (prediction_type_str == "epsilon")
-            param = PredictionType::EPSILON;
-        else if (prediction_type_str == "sample")
-            param = PredictionType::SAMPLE;
-        else if (prediction_type_str == "v_prediction")
-            param = PredictionType::V_PREDICTION;
-        else if (!prediction_type_str.empty()) {
-            OPENVINO_THROW("Unsupported value for 'prediction_type' ", prediction_type_str);
-        }
-    }
-}
-
-}  // namespace utils
-}  // namespace genai
-}  // namespace ov
 
 LCMScheduler::Config::Config(const std::string scheduler_config_path) {
     std::ifstream file(scheduler_config_path);

@@ -6,7 +6,8 @@
 #include <list>
 #include <string>
 
-#include "scheduler.hpp"
+#include "types.hpp"
+#include "diffusers/scheduler.hpp"
 
 class LMSDiscreteScheduler : public Scheduler {
 public:

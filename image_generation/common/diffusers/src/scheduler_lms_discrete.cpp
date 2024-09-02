@@ -132,7 +132,7 @@ LMSDiscreteScheduler::Config::Config(const std::string& scheduler_config_path) {
 }
 
 LMSDiscreteScheduler::LMSDiscreteScheduler(const std::string scheduler_config_path) 
-    : m_config(scheduler_config_path) {
+    : LMSDiscreteScheduler(Config(scheduler_config_path)) {
 }
 
 LMSDiscreteScheduler::LMSDiscreteScheduler(const Config& scheduler_config)

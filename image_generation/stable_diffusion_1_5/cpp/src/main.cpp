@@ -10,7 +10,9 @@
 
 #include "cxxopts.hpp"
 #include "imwrite.hpp"
-#include "lora.hpp"
+
+#include "diffusers/lora.hpp"
+#include "diffusers/scheduler.hpp"
 
 #include "openvino/genai/tokenizer.hpp"
 #include "openvino/core/preprocess/pre_post_process.hpp"
@@ -19,9 +21,6 @@
 #include "openvino/op/multiply.hpp"
 #include "openvino/pass/manager.hpp"
 #include "openvino/runtime/core.hpp"
-
-#include "scheduler_lms_discrete.hpp"
-#include "scheduler_lcm.hpp"
 
 #include "utils.hpp"
 
@@ -196,7 +195,9 @@ public:
             nlohmann::json data = nlohmann::json::parse(file);
             using ov::genai::utils::read_json_param;
 
+            read_json_param(data, "in_channels", in_channels);
             read_json_param(data, "sample_size", sample_size);
+            read_json_param(data, "block_out_channels", block_out_channels);
             read_json_param(data, "time_cond_proj_dim", time_cond_proj_dim);
         }
     };
@@ -377,6 +378,11 @@ class StableDiffusionPipeline {
 public:
     StableDiffusionPipeline(const std::string& root_dir) {
         const std::string model_index_path = root_dir + "/model_index.json";
+        std::ifstream file(model_index_path);
+        OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
+
+        nlohmann::json data = nlohmann::json::parse(file);
+        using ov::genai::utils::read_json_param;
 
         m_scheduler = Scheduler::from_config(root_dir + "/scheduler/scheduler_config.json");
         m_clip_text_encoder = std::make_shared<CLIPTextModel>(root_dir);
