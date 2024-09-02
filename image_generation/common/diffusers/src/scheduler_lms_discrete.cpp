@@ -4,6 +4,9 @@
 #include "scheduler_lms_discrete.hpp"
 
 #include <cmath>
+#include <fstream>
+
+#include "utils.hpp"
 
 namespace {
 
@@ -86,24 +89,66 @@ int64_t LMSDiscreteScheduler::_sigma_to_t(float sigma) const {
     return timestep;
 }
 
-LMSDiscreteScheduler::LMSDiscreteScheduler(int32_t num_train_timesteps,
-                                           float beta_start,
-                                           float beta_end,
-                                           BetaSchedule beta_schedule,
-                                           PredictionType prediction_type,
-                                           const std::vector<float>& trained_betas) {
+LMSDiscreteScheduler::Config::Config(const std::string& scheduler_config_path) {
+    std::ifstream file(scheduler_config_path);
+    OPENVINO_ASSERT(file.is_open(), "Failed to open ", scheduler_config_path);
+
+    nlohmann::json data = nlohmann::json::parse(file);
+    using ov::genai::utils::read_json_param;
+
+    read_json_param(data, "beta_start", beta_start);
+    read_json_param(data, "beta_end", beta_end);
+    read_json_param(data, "num_train_timesteps", num_train_timesteps);
+
+    std::string beta_schedule_str;
+    read_json_param(data, "beta_schedule", beta_schedule_str);
+    if (beta_schedule_str == "linear")
+        beta_schedule = BetaSchedule::LINEAR;
+    else if (beta_schedule_str == "scaled_linear")
+        beta_schedule = BetaSchedule::SCALED_LINEAR;
+    else if (beta_schedule_str == "squaredcos_cap_v2")
+        beta_schedule = BetaSchedule::SQUAREDCOS_CAP_V2;
+    else if (!beta_schedule_str.empty()) {
+        OPENVINO_THROW("Unsupported value for 'beta_schedule' ", beta_schedule_str);
+    }
+
+    std::string prediction_type_str;
+    read_json_param(data, "prediction_type", prediction_type_str);
+    if (prediction_type_str == "epsilon")
+        prediction_type = PredictionType::EPSILON;
+    else if (prediction_type_str == "sample")
+        prediction_type = PredictionType::SAMPLE;
+    else if (prediction_type_str == "v_prediction")
+        prediction_type = PredictionType::V_PREDICTION;
+    else if (!prediction_type_str.empty()) {
+        OPENVINO_THROW("Unsupported value for 'prediction_type' ", prediction_type_str);
+    }
+
+    if (data.contains("trained_betas") && !data["trained_betas"].is_null()) {
+        for (const auto & elem : data["trained_betas"]) {
+            trained_betas.push_back(elem);
+        }
+    }
+}
+
+LMSDiscreteScheduler::LMSDiscreteScheduler(const std::string scheduler_config_path) 
+    : m_config(scheduler_config_path) {
+}
+
+LMSDiscreteScheduler::LMSDiscreteScheduler(const Config& scheduler_config)
+    : m_config(scheduler_config) {
     std::vector<float> alphas, betas;
 
-    if (!trained_betas.empty()) {
-        betas = trained_betas;
-    } else if (beta_schedule == BetaSchedule::LINEAR) {
-        for (int32_t i = 0; i < num_train_timesteps; i++) {
-            betas.push_back(beta_start + (beta_end - beta_start) * i / (num_train_timesteps - 1));
+    if (!m_config.trained_betas.empty()) {
+        betas = m_config.trained_betas;
+    } else if (m_config.beta_schedule == BetaSchedule::LINEAR) {
+        for (int32_t i = 0; i < m_config.num_train_timesteps; i++) {
+            betas.push_back(m_config.beta_start + (m_config.beta_end - m_config.beta_start) * i / (m_config.num_train_timesteps - 1));
         }
-    } else if (beta_schedule == BetaSchedule::SCALED_LINEAR) {
-        float start = std::sqrt(beta_start);
-        float end = std::sqrt(beta_end);
-        std::vector<float> temp = linspace(start, end, num_train_timesteps);
+    } else if (m_config.beta_schedule == BetaSchedule::SCALED_LINEAR) {
+        float start = std::sqrt(m_config.beta_start);
+        float end = std::sqrt(m_config.beta_end);
+        std::vector<float> temp = linspace(start, end, m_config.num_train_timesteps);
         for (float b : temp) {
             betas.push_back(b * b);
         }

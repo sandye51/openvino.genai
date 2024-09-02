@@ -174,7 +174,6 @@ private:
 };
 
 class UNet2DConditionModel : public IAdaptedModel {
-
 public:
     struct Config {
         size_t in_channels = 4;

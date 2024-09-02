@@ -4,17 +4,25 @@
 #pragma once
 
 #include <list>
+#include <string>
 
 #include "scheduler.hpp"
 
 class LMSDiscreteScheduler : public Scheduler {
 public:
-    LMSDiscreteScheduler(int32_t num_train_timesteps = 1000,
-                         float beta_start = 0.00085f,
-                         float beta_end = 0.012f,
-                         BetaSchedule beta_schedule = BetaSchedule::SCALED_LINEAR,
-                         PredictionType prediction_type = PredictionType::EPSILON,
-                         const std::vector<float>& trained_betas = {});
+    struct Config {
+        int32_t num_train_timesteps = 1000;
+        float beta_start = 0.00085f, beta_end = 0.012f;
+        BetaSchedule beta_schedule = BetaSchedule::SCALED_LINEAR;
+        PredictionType prediction_type = PredictionType::EPSILON;
+        std::vector<float> trained_betas = {};
+
+        Config() = default;
+        explicit Config(const std::string& scheduler_config_path);
+    };
+
+    explicit LMSDiscreteScheduler(const std::string scheduler_config_path);
+    explicit LMSDiscreteScheduler(const Config& scheduler_config);
 
     void set_timesteps(size_t num_inference_steps) override;
 
@@ -27,6 +35,8 @@ public:
     std::map<std::string, ov::Tensor> step(ov::Tensor noise_pred, ov::Tensor latents, size_t inference_step) override;
 
 private:
+    Config m_config;
+
     std::vector<float> m_log_sigmas;
     std::vector<float> m_sigmas;
     std::vector<int64_t> m_timesteps;
