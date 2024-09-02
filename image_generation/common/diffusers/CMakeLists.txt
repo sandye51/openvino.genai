@@ -17,7 +17,11 @@ endif()
 # dependencies
 
 find_package(OpenVINO REQUIRED COMPONENTS Runtime)
-target_link_libraries(diffusers PUBLIC openvino::runtime)
+find_package(OpenVINOGenAI REQUIRED)
+
+target_link_libraries(diffusers
+    PUBLIC openvino::runtime
+    PRIVATE openvino::genai)
 
 include(FetchContent)
 

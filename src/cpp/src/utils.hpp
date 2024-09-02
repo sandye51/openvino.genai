@@ -32,7 +32,6 @@ void read_json_param(const nlohmann::json& data, const std::string& name, T& par
     if (data.contains(name)) {
         if (data[name].is_number() || data[name].is_boolean() || data[name].is_string()) {
             param = data[name].get<T>();
-            std::cout << name << " " << param << std::endl;
         }
     }
 }
@@ -40,13 +39,10 @@ void read_json_param(const nlohmann::json& data, const std::string& name, T& par
 template <typename V>
 void read_json_param(const nlohmann::json& data, const std::string& name, std::vector<V>& param) {
     if (data.contains(name) && data[name].is_array()) {
-        std::cout << name << " : ";
         param.resize(0);
         for (const auto elem : data[name]) {
             param.push_back(elem.get<V>());
-            std::cout << param.back() << " ";
         }
-        std::cout << std::endl;
     }
 }
 

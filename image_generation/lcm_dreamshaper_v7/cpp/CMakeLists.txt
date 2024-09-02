@@ -15,8 +15,6 @@ set(CMAKE_BUILD_TYPE "Release" CACHE STRING "CMake build type")
 
 # dependencies
 
-find_package(OpenVINO REQUIRED COMPONENTS Runtime Threading)
-
 include(FetchContent)
 
 FetchContent_Declare(cxxopts
@@ -27,18 +25,12 @@ FetchContent_MakeAvailable(cxxopts)
 
 add_subdirectory(../../common/imwrite _deps/imwrite)
 add_subdirectory(../../common/diffusers _deps/diffusers)
-add_subdirectory(../../../thirdparty/openvino_tokenizers/ _deps/tokenizers)
 
 # create executable
 
 add_executable(${PROJECT_NAME} ${PROJECT_SOURCE_DIR}/src/main.cpp)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    openvino::runtime
     cxxopts::cxxopts
     diffusers::diffusers
     imwrite::imwrite)
-
-add_dependencies(${PROJECT_NAME} openvino_tokenizers)
-
-target_compile_definitions(${PROJECT_NAME} PRIVATE TOKENIZERS_LIBRARY_PATH=\"$<TARGET_FILE:openvino_tokenizers>\")
