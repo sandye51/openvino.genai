@@ -41,6 +41,7 @@ template <typename V>
 void read_json_param(const nlohmann::json& data, const std::string& name, std::vector<V>& param) {
     if (data.contains(name) && data[name].is_array()) {
         std::cout << name << " : ";
+        param.resize(0);
         for (const auto elem : data[name]) {
             param.push_back(elem.get<V>());
             std::cout << param.back() << " ";

@@ -99,7 +99,7 @@ public:
     struct Config {
         // TODO: is it better to use tokenizer max length?
         size_t max_position_embeddings = 77;
-        size_t projection_dim = 512;
+        size_t hidden_size = 512;
 
         explicit Config(const std::string& config_path) {
             std::ifstream file(config_path);
@@ -109,7 +109,7 @@ public:
             using ov::genai::utils::read_json_param;
 
             read_json_param(data, "max_position_embeddings", max_position_embeddings);
-            read_json_param(data, "projection_dim", projection_dim);
+            read_json_param(data, "hidden_size", hidden_size);
         }
     };
 
@@ -156,13 +156,13 @@ public:
             m_request.infer();
         };
 
-        ov::Tensor text_embeddings(ov::element::f32, {text_embedding_batch_size, m_config.max_position_embeddings, m_config.projection_dim});
+        ov::Tensor text_embeddings(ov::element::f32, {text_embedding_batch_size, m_config.max_position_embeddings, m_config.hidden_size});
 
         size_t current_batch_idx = 0;
         if (do_classifier_free_guidance) {
             compute_text_embeddings(neg_prompt,
                                     ov::Tensor(text_embeddings, {current_batch_idx, 0, 0},
-                                                                {current_batch_idx + 1, m_config.max_position_embeddings, m_config.projection_dim}));
+                                                                {current_batch_idx + 1, m_config.max_position_embeddings, m_config.hidden_size}));
             ++current_batch_idx;
         } else {
             // Negative prompt is ignored when --guidanceScale < 1.0
@@ -170,7 +170,7 @@ public:
 
         compute_text_embeddings(pos_prompt,
                                 ov::Tensor(text_embeddings, {current_batch_idx, 0, 0},
-                                                            {current_batch_idx + 1, m_config.max_position_embeddings, m_config.projection_dim}));
+                                                            {current_batch_idx + 1, m_config.max_position_embeddings, m_config.hidden_size}));
 
         return text_embeddings;
     }
