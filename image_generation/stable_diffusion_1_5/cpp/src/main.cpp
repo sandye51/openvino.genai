@@ -385,9 +385,27 @@ public:
         using ov::genai::utils::read_json_param;
 
         m_scheduler = Scheduler::from_config(root_dir + "/scheduler/scheduler_config.json");
-        m_clip_text_encoder = std::make_shared<CLIPTextModel>(root_dir);
-        m_unet = std::make_shared<UNet2DConditionModel>(root_dir);
-        m_vae_decoder = std::make_shared<AutoencoderKL>(root_dir);
+
+        const std::string text_encoder = data["text_encoder"][1].get<std::string>();
+        if (text_encoder == "CLIPTextModel") {
+            m_clip_text_encoder = std::make_shared<CLIPTextModel>(root_dir);
+        } else {
+            OPENVINO_THROW("Unsupported '", text_encoder, "' text encoder type");
+        }
+
+        const std::string unet = data["unet"][1].get<std::string>();
+        if (unet == "UNet2DConditionModel") {
+            m_unet = std::make_shared<UNet2DConditionModel>(root_dir);
+        } else {
+            OPENVINO_THROW("Unsupported '", unet, "' UNet type");
+        }
+
+        const std::string vae = data["vae"][1].get<std::string>();
+        if (vae == "AutoencoderKL") {
+            m_vae_decoder = std::make_shared<AutoencoderKL>(root_dir);
+        } else {
+            OPENVINO_THROW("Unsupported '", vae, "' VAE decoder type");
+        }
     }
 
     void reshape(const size_t batch_size, const size_t height, const size_t width) {
