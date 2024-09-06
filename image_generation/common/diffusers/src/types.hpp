@@ -17,7 +17,7 @@ enum class BetaSchedule {
 
 enum class PredictionType {
     EPSILON,
-    SAMPLE, 
+    SAMPLE,
     V_PREDICTION
 };
 

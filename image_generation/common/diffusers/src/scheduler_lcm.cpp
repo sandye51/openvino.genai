@@ -12,21 +12,21 @@
 template <typename T, typename U>
 std::vector<T> linspace(U start, U end, size_t num, bool endpoint = false) {
     std::vector<T> indices;
-        if (num != 0) {
-            if (num == 1)
-                indices.push_back(static_cast<T>(start));
-            else {
-                if (endpoint)
-                    --num;
+    if (num != 0) {
+        if (num == 1)
+            indices.push_back(static_cast<T>(start));
+        else {
+            if (endpoint)
+                --num;
 
-                U delta = (end - start) / static_cast<U>(num);
-                for (size_t i = 0; i < num; i++)
-                    indices.push_back(static_cast<T>(start + delta * i));
+            U delta = (end - start) / static_cast<U>(num);
+            for (size_t i = 0; i < num; i++)
+                indices.push_back(static_cast<T>(start + delta * i));
 
-                if (endpoint)
-                    indices.push_back(static_cast<T>(end));
-            }
+            if (endpoint)
+                indices.push_back(static_cast<T>(end));
         }
+    }
     return indices;
 }
 
@@ -82,7 +82,7 @@ LCMScheduler::LCMScheduler(const Config& scheduler_config,
     std::vector<float> alphas, betas;
 
     if (!m_config.trained_betas.empty()) {
-        auto betas = m_config.trained_betas;
+        betas = m_config.trained_betas;
     } else if (m_config.beta_schedule == BetaSchedule::LINEAR) {
         for (size_t i = 0; i < m_config.num_train_timesteps; i++) {
             betas.push_back(m_config.beta_start + (m_config.beta_end - m_config.beta_start) * i / (m_config.num_train_timesteps - 1));

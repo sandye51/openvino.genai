@@ -47,7 +47,7 @@ public:
         return m_config;
     }
 
-    void reshape(size_t batch_size) {
+    void reshape(int batch_size) {
         ov::PartialShape input_shape = m_model->input(0).get_partial_shape();
         input_shape[0] = batch_size;
         input_shape[1] = m_config.max_position_embeddings;

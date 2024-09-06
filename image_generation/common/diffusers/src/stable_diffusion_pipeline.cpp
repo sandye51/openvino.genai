@@ -99,7 +99,7 @@ public:
         }
     }
 
-    explicit StableDiffusionPipelineImpl(const std::string& root_dir, const std::string& device, const ov::AnyMap& properties) {
+    StableDiffusionPipelineImpl(const std::string& root_dir, const std::string& device, const ov::AnyMap& properties) {
         const std::string model_index_path = root_dir + "/model_index.json";
         std::ifstream file(model_index_path);
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
@@ -135,7 +135,7 @@ public:
         m_scheduler = scheduler;
     }
 
-    void reshape(const size_t batch_size, const size_t height, const size_t width) {
+    void reshape(const int batch_size, const int height, const int width) {
         m_clip_text_encoder->reshape(batch_size);
         m_unet->reshape(batch_size, height, width, m_clip_text_encoder->get_config().max_position_embeddings);
         m_vae_decoder->reshape(height, width);
@@ -270,7 +270,7 @@ void StableDiffusionPipeline::set_scheduler(std::shared_ptr<Scheduler> scheduler
     m_impl->set_scheduler(scheduler);
 }
 
-void StableDiffusionPipeline::reshape(const size_t batch_size, const size_t height, const size_t width) {
+void StableDiffusionPipeline::reshape(const int batch_size, const int height, const int width) {
     m_impl->reshape(batch_size, height, width);
 }
 

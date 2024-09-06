@@ -35,7 +35,6 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${EIGEN3_INCLUDE_DIR})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    openvino::genai
     cxxopts::cxxopts
     diffusers::diffusers
     imwrite::imwrite)

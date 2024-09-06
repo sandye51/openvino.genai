@@ -24,11 +24,11 @@ int32_t main(int32_t argc, char* argv[]) try {
     ("s,seed", "Number of random seed to generate latent for one image output", cxxopts::value<size_t>()->default_value("42"))
     ("guidanceScale", "A higher guidance scale value encourages the model to generate images closely linked to the text prompt at the expense of lower image quality", cxxopts::value<float>()->default_value("7.5"))
     ("num", "Number of image output", cxxopts::value<size_t>()->default_value("1"))
-    ("height", "Destination image height", cxxopts::value<size_t>()->default_value("512"))
-    ("width", "Destination image width", cxxopts::value<size_t>()->default_value("512"))
+    ("height", "Destination image height", cxxopts::value<int32_t>()->default_value("512"))
+    ("width", "Destination image width", cxxopts::value<int32_t>()->default_value("512"))
     ("c,useCache", "Use model caching", cxxopts::value<bool>()->default_value("false"))
     ("r,readNPLatent", "Read numpy generated latents from file", cxxopts::value<bool>()->default_value("false"))
-    ("m,modelPath", "Specify path of SD model IRs", cxxopts::value<std::string>()->default_value("./models/dreamlike_anime_1_0_ov"))
+    ("m,modelPath", "Specify path of SD model IRs", cxxopts::value<std::string>()->default_value("./models/dreamlike_anime_1_0_ov/FP16"))
     ("dynamic", "Specify the model input shape to use dynamic shape", cxxopts::value<bool>()->default_value("false"))
     ("l,loraPath", "Specify path of LoRA file. (*.safetensors).", cxxopts::value<std::string>()->default_value(""))
     ("a,alpha", "alpha for LoRA", cxxopts::value<float>()->default_value("0.75"))("h,help", "Print usage");
@@ -54,8 +54,8 @@ int32_t main(int32_t argc, char* argv[]) try {
     const uint32_t user_seed = result["seed"].as<size_t>();
     const float guidance_scale = result["guidanceScale"].as<float>();
     const uint32_t num_images_per_prompt = result["num"].as<size_t>();
-    const uint32_t height = result["height"].as<size_t>();
-    const uint32_t width = result["width"].as<size_t>();
+    const int32_t height = result["height"].as<int32_t>();
+    const int32_t width = result["width"].as<int32_t>();
     const bool use_cache = result["useCache"].as<bool>();
     const bool read_np_latent = result["readNPLatent"].as<bool>();
     const std::string models_path = result["modelPath"].as<std::string>();
@@ -93,7 +93,10 @@ int32_t main(int32_t argc, char* argv[]) try {
         height, width, num_inference_steps, num_images_per_prompt);
 
     for (size_t n = 0; n < num_images_per_prompt; ++n) {
-        ov::Tensor generated_image(generated_images, { n, 0, 0, 0 }, { n + 1, height, width, 3 });
+        ov::Shape gen_shape = generated_images.get_shape();
+        size_t gen_width = gen_shape[2], gen_height = gen_shape[1];
+
+        ov::Tensor generated_image(generated_images, { n, 0, 0, 0 }, { n + 1, gen_height, gen_width, 3 });
         std::string result_image_path = "./images/seed_" + std::to_string(n) + ".bmp";
         imwrite(result_image_path, generated_image, true);
     }

@@ -70,7 +70,7 @@ public:
         return m_request.get_output_tensor();
     }
 
-    void reshape(int64_t batch_size, int64_t height, int64_t width, int64_t tokenizer_model_max_length) {
+    void reshape(int batch_size, int height, int width, int tokenizer_model_max_length) {
         OPENVINO_ASSERT(m_model, "Model has been already compiled");
 
         // TODO: what if it's disabled?
