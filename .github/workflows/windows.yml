@@ -234,6 +234,7 @@ jobs:
           cmake --build ./build/ --config Release -j
 
       - name: Test bindings
+        if: ${{ false }} # duplication with step below
         run: |
           . "${{ env.OV_INSTALL_DIR }}/setupvars.ps1"
           python -m pip install ./thirdparty/openvino_tokenizers/[transformers] -r ./tests/python_tests/requirements.txt --find-links ${env:OV_INSTALL_DIR}/tools --upgrade-strategy eager
@@ -336,3 +337,16 @@ jobs:
           . "${{ env.OV_INSTALL_DIR }}/setupvars.ps1"
           python ${{ env.OV_INSTALL_DIR }}\samples\python\multinomial_causal_lm\multinomial_causal_lm.py TinyLlama-1.1B-Chat-v1.0 0
 
+  Overall_Status:
+    name: ci/gha_overall_status_linux
+    needs: [openvino_download, openvino_build, genai_python_lib, genai_package]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check status of all jobs
+        if: >-
+          ${{
+            contains(needs.*.result, 'failure') ||
+            contains(needs.*.result, 'cancelled')
+          }}
+        run: exit 1

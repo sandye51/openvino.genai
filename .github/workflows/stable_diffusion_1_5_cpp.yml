@@ -131,3 +131,17 @@ jobs:
           run: |
             . "${{ env.OV_INSTALL_DIR }}/setupvars.ps1"
             ./build/Release/stable_diffusion.exe -m ./models/stable_diffusion_v1_5_ov -t FP16 --dynamic
+
+  Overall_Status:
+    name: ci/gha_overall_status_stable_diffusion
+    needs: [stable_diffusion_1_5_cpp-linux, stable_diffusion_1_5_cpp-windows]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check status of all jobs
+        if: >-
+          ${{
+            contains(needs.*.result, 'failure') ||
+            contains(needs.*.result, 'cancelled')
+          }}
+        run: exit 1
