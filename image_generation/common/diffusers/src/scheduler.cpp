@@ -25,9 +25,8 @@ std::shared_ptr<Scheduler> Scheduler::from_config(const std::string& scheduler_c
 
     std::shared_ptr<Scheduler> scheduler = nullptr;
     if (scheduler_type == SchedulerType::LCM) {
-        // TODO: get read of extra arguments
-        LCMScheduler::Config scheduler_config(scheduler_config_path);
-        scheduler = std::make_shared<LCMScheduler>(scheduler_config, false, 42);
+        // TODO: do we need to pass RNG generator somehow to LCM?
+        scheduler = std::make_shared<LCMScheduler>(scheduler_config_path);
     } else if (scheduler_type == SchedulerType::LMS_DISCRETE) {
         scheduler = std::make_shared<LMSDiscreteScheduler>(scheduler_config_path);
     } else {

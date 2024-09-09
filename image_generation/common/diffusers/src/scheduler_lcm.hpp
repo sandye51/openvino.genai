@@ -36,7 +36,7 @@ public:
     };
 
     explicit LCMScheduler(const std::string scheduler_config_path);
-    LCMScheduler(const Config& scheduler_config, bool read_torch_noise, uint32_t seed);
+    explicit LCMScheduler(const Config& scheduler_config);
 
     void set_timesteps(size_t num_inference_steps) override;
 
@@ -58,12 +58,9 @@ private:
 
     std::vector<int64_t> m_timesteps;
 
-    bool m_read_torch_noise;
-
+    uint32_t m_seed;
     std::mt19937 m_gen;
     std::normal_distribution<float> m_normal;
-    uint32_t m_seed;
 
     std::vector<float> threshold_sample(const std::vector<float>& flat_sample);
-    std::vector<float> randn_function(uint32_t size, uint32_t seed);
 };

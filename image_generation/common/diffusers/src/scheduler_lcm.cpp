@@ -30,13 +30,6 @@ std::vector<T> linspace(U start, U end, size_t num, bool endpoint = false) {
     return indices;
 }
 
-std::vector<float> read_vector_from_txt(std::string& file_name) {
-    std::ifstream input_data(file_name, std::ifstream::in);
-    std::istream_iterator<float> start(input_data), end;
-    std::vector<float> res(start, end);
-    return res;
-}
-
 LCMScheduler::Config::Config(const std::string scheduler_config_path) {
     std::ifstream file(scheduler_config_path);
     OPENVINO_ASSERT(file.is_open(), "Failed to open ", scheduler_config_path);
@@ -65,16 +58,13 @@ LCMScheduler::Config::Config(const std::string scheduler_config_path) {
 }
 
 LCMScheduler::LCMScheduler(const std::string scheduler_config_path) :
-    LCMScheduler(Config(scheduler_config_path), true, 0) {
+    LCMScheduler(Config(scheduler_config_path)) {
 }
 
-LCMScheduler::LCMScheduler(const Config& scheduler_config,
-                           bool read_torch_noise,
-                           uint32_t seed)
+LCMScheduler::LCMScheduler(const Config& scheduler_config)
     : m_config(scheduler_config),
-      m_read_torch_noise(read_torch_noise),
-      m_seed(seed),
-      m_gen(seed),
+      m_seed(42),
+      m_gen(m_seed),
       m_normal(0.0f, 1.0f) {
 
     m_sigma_data = 0.5f; // Default: 0.5
@@ -203,18 +193,10 @@ std::map<std::string, ov::Tensor> LCMScheduler::step(ov::Tensor noise_pred, ov::
     float* prev_sample_data = prev_sample.data<float>();
 
     if (inference_step != m_num_inference_steps - 1) {
-        std::vector<float> noise;
-        if (m_read_torch_noise) {
-            std::string noise_file = "./latents/torch_noise_step_" + std::to_string(inference_step) + ".txt";
-            noise = read_vector_from_txt(noise_file);
-        } else {
-            noise = randn_function(noise_pred.get_size(), m_seed);
-        }
-
         for (std::size_t i = 0; i < noise_pred.get_size(); ++i) {
-            prev_sample_data[i] = alpha_prod_t_prev_sqrt * denoised_data[i] + beta_prod_t_prev_sqrt * noise[i];
+            float gen_noise = m_normal(m_gen);
+            prev_sample_data[i] = alpha_prod_t_prev_sqrt * denoised_data[i] + beta_prod_t_prev_sqrt * gen_noise;
         }
-
     } else {
         std::copy_n(denoised_data, denoised.get_size(), prev_sample_data);
     }
@@ -266,14 +248,4 @@ std::vector<float> LCMScheduler::threshold_sample(const std::vector<float>& flat
     }
 
     return thresholded_sample;
-}
-
-std::vector<float> LCMScheduler::randn_function(uint32_t size, uint32_t seed = 42) {
-    std::vector<float> noise(size);
-    {
-        std::for_each(noise.begin(), noise.end(), [&](float& x) {
-            x = m_normal(m_gen);
-        });
-    }
-    return noise;
 }
