@@ -155,10 +155,10 @@ void LMSDiscreteScheduler::scale_model_input(ov::Tensor sample, size_t inference
 }
 
 void LMSDiscreteScheduler::set_timesteps(size_t num_inference_steps) {
-    float delta = (1.0f - m_config.num_train_timesteps) / (num_inference_steps - 1.0f);
+    float delta = -999.0f / (num_inference_steps - 1);
     // transform interpolation to time range
     for (size_t i = 0; i < num_inference_steps; i++) {
-        float t = (m_config.num_train_timesteps - 1) + i * delta;
+        float t = 999.0 + i * delta;
         int32_t low_idx = std::floor(t);
         int32_t high_idx = std::ceil(t);
         float w = t - low_idx;
