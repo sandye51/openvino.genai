@@ -3,7 +3,7 @@
 
 #include "diffusers/stable_diffusion_pipeline.hpp"
 
-#include <random>
+#include <ctime>
 
 #include "clip_text_model.hpp"
 #include "unet2d_condition_model.hpp"
@@ -12,35 +12,6 @@
 #include "utils.hpp"
 
 namespace {
-
-ov::Tensor randn_tensor(ov::Shape shape, bool use_np_latents, uint32_t seed = 42) {
-    ov::Tensor noise(ov::element::f32, shape);
-    if (use_np_latents) {
-        // read np generated latents with defaut seed 42
-        const char* latent_file_name = "../np_latents_512x512.txt";
-        std::ifstream latent_copy_file(latent_file_name, std::ios::ate);
-        OPENVINO_ASSERT(latent_copy_file.is_open(), "Cannot open ", latent_file_name);
-
-        size_t file_size = latent_copy_file.tellg() / sizeof(float);
-        OPENVINO_ASSERT(file_size >= noise.get_size(),
-                        "Cannot generate ",
-                        noise.get_shape(),
-                        " with ",
-                        latent_file_name,
-                        ". File size is small");
-
-        latent_copy_file.seekg(0, std::ios::beg);
-        for (size_t i = 0; i < noise.get_size(); ++i)
-            latent_copy_file >> noise.data<float>()[i];
-    } else {
-        std::mt19937 gen{seed};
-        std::normal_distribution<float> normal{0.0f, 1.0f};
-        std::generate_n(noise.data<float>(), noise.get_size(), [&]() {
-            return normal(gen);
-        });
-    }
-    return noise;
-}
 
 ov::Tensor get_guidance_scale_embedding(float guidance_scale, uint32_t embedding_dim) {
     float w = guidance_scale * 1000;
@@ -63,7 +34,47 @@ ov::Tensor get_guidance_scale_embedding(float guidance_scale, uint32_t embedding
     return w_embedding;
 }
 
+// TODO: remove duplication with utils.hpp
+template <typename T>
+void read_anymap_param(const ov::AnyMap& config_map, const std::string& name, T& param) {
+    auto it = config_map.find(name);
+    if (it != config_map.end()) {
+        param = it->second.as<T>();
+    }
+}
+
 } // namespace
+
+CppStdGenerator::CppStdGenerator(uint32_t seed)
+    : gen(seed), normal(0.0f, 1.0f) {
+}
+
+float CppStdGenerator::next() {
+    return normal(gen);
+}
+
+void StableDiffusionPipeline::GenerationConfig::update_generation_config(const ov::AnyMap& properties) {
+    // override whole generation config first
+    read_anymap_param(properties, "SD_GENERATION_CONFIG", *this);
+    // then try per-parameter values
+    read_anymap_param(properties, "negative_prompt", negative_prompt);
+    read_anymap_param(properties, "num_images_per_prompt", num_images_per_prompt);
+    read_anymap_param(properties, "random_generator", random_generator);
+    read_anymap_param(properties, "guidance_scale", guidance_scale);
+    read_anymap_param(properties, "height", height);
+    read_anymap_param(properties, "width", width);
+    read_anymap_param(properties, "num_inference_steps", num_inference_steps);
+ 
+    validate();
+}
+
+std::pair<std::string, ov::Any> generation_config(const StableDiffusionPipeline::GenerationConfig& generation_config) {
+    return {"SD_GENERATION_CONFIG", ov::Any::make<StableDiffusionPipeline::GenerationConfig>(generation_config)};
+}
+
+void StableDiffusionPipeline::GenerationConfig::validate() const {
+    OPENVINO_ASSERT(guidance_scale >= 1.0f || negative_prompt.empty(), "Guidance scale < 1.0 ignores negative prompt");
+}
 
 class StableDiffusionPipeline::StableDiffusionPipelineImpl {
 public:
@@ -97,6 +108,9 @@ public:
         } else {
             OPENVINO_THROW("Unsupported '", vae, "' VAE decoder type");
         }
+
+        // initialize generation config
+        initialize_generation_config(data["_class_name"].get<std::string>());
     }
 
     StableDiffusionPipelineImpl(const std::string& root_dir, const std::string& device, const ov::AnyMap& properties) {
@@ -129,6 +143,9 @@ public:
         } else {
             OPENVINO_THROW("Unsupported '", vae, "' VAE decoder type");
         }
+
+        // initialize generation config
+        initialize_generation_config(data["_class_name"].get<std::string>());
     }
 
     void set_scheduler(std::shared_ptr<Scheduler> scheduler) {
@@ -155,59 +172,64 @@ public:
         m_unet->apply_lora(lora_weights["unet"]);
     }
 
+    GenerationConfig get_generation_config() const {
+        return m_generation_config;
+    }
+
+    void set_generation_config(const GenerationConfig& generation_config) {
+        m_generation_config = generation_config;
+    }
+
     ov::Tensor generate(const std::string& positive_prompt,
-                        const std::string& negative_prompt /* can be empty */,
-                        float guidance_scale,
-                        int64_t height,
-                        int64_t width,
-                        size_t num_inference_steps,
-                        size_t num_images_per_prompt) {
-        OPENVINO_ASSERT(num_images_per_prompt == 1, "Currently only num_images_per_prompt = 1 is supported");
+                        const ov::AnyMap& properties) {
+        GenerationConfig generation_config = m_generation_config;
+        generation_config.update_generation_config(properties);
+
+        OPENVINO_ASSERT(generation_config.num_images_per_prompt == 1, "Currently only num_images_per_prompt = 1 is supported");
 
         // Stable Diffusion pipeline
         // see https://huggingface.co/docs/diffusers/using-diffusers/write_own_pipeline#deconstruct-the-stable-diffusion-pipeline
 
         const auto& unet_config = m_unet->get_config();
-        const size_t batch_size_multiplier = do_classifier_free_guidance(guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
+        const size_t batch_size_multiplier = do_classifier_free_guidance(generation_config.guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
         const size_t vae_scale_factor = m_unet->get_vae_scale_factor();
 
-        // TODO: drop these variables
-        const bool read_np_latent = false;
-        const size_t user_seed = 42;
+        if (generation_config.height < 0)
+            generation_config.height = unet_config.sample_size * vae_scale_factor;
+        if (generation_config.width < 0)
+            generation_config.width = unet_config.sample_size * vae_scale_factor;
 
-        if (height < 0)
-            height = unet_config.sample_size * vae_scale_factor;
-        if (width < 0)
-            width = unet_config.sample_size * vae_scale_factor;
+        if (generation_config.random_generator == nullptr) {
+            uint32_t seed = time(NULL);
+            generation_config.random_generator = std::make_shared<CppStdGenerator>(seed);
+        }
 
-        ov::Tensor encoder_hidden_states = m_clip_text_encoder->forward(positive_prompt, negative_prompt,
-            do_classifier_free_guidance(guidance_scale));
+        ov::Tensor encoder_hidden_states = m_clip_text_encoder->forward(positive_prompt, generation_config.negative_prompt,
+            batch_size_multiplier > 1);
         m_unet->set_hidden_states("encoder_hidden_states", encoder_hidden_states);
 
         if (unet_config.time_cond_proj_dim >= 0) {
-            ov::Tensor guidance_scale_embedding = get_guidance_scale_embedding(guidance_scale, unet_config.time_cond_proj_dim);
+            ov::Tensor guidance_scale_embedding = get_guidance_scale_embedding(generation_config.guidance_scale, unet_config.time_cond_proj_dim);
             m_unet->set_hidden_states("timestep_cond", guidance_scale_embedding);
         }
 
-        m_scheduler->set_timesteps(num_inference_steps);
+        m_scheduler->set_timesteps(generation_config.num_inference_steps);
         std::vector<std::int64_t> timesteps = m_scheduler->get_timesteps();
 
         ov::Tensor denoised;
-        for (uint32_t n = 0; n < num_images_per_prompt; n++) {
-            std::uint32_t seed = user_seed + n;
-
+        for (uint32_t n = 0; n < generation_config.num_images_per_prompt; n++) {
             // latents are multiplied by 'init_noise_sigma'
-            ov::Shape latent_shape = ov::Shape{num_images_per_prompt, unet_config.in_channels, height / vae_scale_factor, width / vae_scale_factor};
-            ov::Tensor noise = randn_tensor(latent_shape, read_np_latent, seed);
+            ov::Shape latent_shape{generation_config.num_images_per_prompt, unet_config.in_channels,
+                                   generation_config.height / vae_scale_factor, generation_config.width / vae_scale_factor};
             ov::Shape latent_shape_cfg = latent_shape;
             latent_shape_cfg[0] *= batch_size_multiplier;
 
             ov::Tensor latent(ov::element::f32, latent_shape), latent_cfg(ov::element::f32, latent_shape_cfg);
-            for (size_t i = 0; i < noise.get_size(); ++i) {
-                latent.data<float>()[i] = noise.data<float>()[i] * m_scheduler->get_init_noise_sigma();
-            }
+            std::generate_n(latent.data<float>(), latent.get_size(), [&]() -> float {
+                return generation_config.random_generator->next() * m_scheduler->get_init_noise_sigma();
+            });
 
-            for (size_t inference_step = 0; inference_step < num_inference_steps; inference_step++) {
+            for (size_t inference_step = 0; inference_step < generation_config.num_inference_steps; inference_step++) {
                 // concat the same latent twice along a batch dimension in case of CFG
                 latent.copy_to(
                     ov::Tensor(latent_cfg, {0, 0, 0, 0}, {1, latent_shape[1], latent_shape[2], latent_shape[3]}));
@@ -222,7 +244,7 @@ public:
                 ov::Tensor noise_pred_tensor = m_unet->forward(latent_cfg, timestep);
 
                 ov::Shape noise_pred_shape = noise_pred_tensor.get_shape();
-                noise_pred_shape[0] = num_images_per_prompt;
+                noise_pred_shape[0] = generation_config.num_images_per_prompt;
 
                 ov::Tensor noisy_residual(noise_pred_tensor.get_element_type(), noise_pred_shape);
 
@@ -233,7 +255,7 @@ public:
 
                     for (size_t i = 0; i < ov::shape_size(noise_pred_shape); ++i) {
                         noisy_residual.data<float>()[i] =
-                            noise_pred_uncond[i] + guidance_scale * (noise_pred_text[i] - noise_pred_uncond[i]);
+                            noise_pred_uncond[i] + generation_config.guidance_scale * (noise_pred_text[i] - noise_pred_uncond[i]);
                     }
                 } else {
                     noisy_residual = noise_pred_tensor;
@@ -256,10 +278,33 @@ private:
         return guidance_scale > 1.0 && m_unet->get_config().time_cond_proj_dim < 0;
     }
 
+    void initialize_generation_config(const std::string& class_name) {
+        OPENVINO_ASSERT(m_unet, "UNet model must be initialized first");
+        const auto& unet_config = m_unet->get_config();
+        const size_t vae_scale_factor = m_unet->get_vae_scale_factor();
+
+        m_generation_config.height = unet_config.sample_size * vae_scale_factor;
+        m_generation_config.width = unet_config.sample_size * vae_scale_factor;
+
+        if (class_name == "StableDiffusionPipeline") {
+            m_generation_config.guidance_scale = 7.5f;
+            m_generation_config.num_inference_steps = 50;
+        } else if (class_name == "StableDiffusionXLPipeline") {
+            m_generation_config.guidance_scale = 5.0f;
+            m_generation_config.num_inference_steps = 50;
+        } else if (class_name == "LatentConsistencyModelPipeline") {
+            m_generation_config.guidance_scale = 7.5f;
+            m_generation_config.num_inference_steps = 50;
+        } else {
+            OPENVINO_THROW("Unsupported class_name '", class_name, "'. Please, contact OpenVINO GenAI developers");
+        }
+    }
+
     std::shared_ptr<Scheduler> m_scheduler;
     std::shared_ptr<CLIPTextModel> m_clip_text_encoder;
     std::shared_ptr<UNet2DConditionModel> m_unet;
     std::shared_ptr<AutoencoderKL> m_vae_decoder;
+    StableDiffusionPipeline::GenerationConfig m_generation_config;
 };
 
 StableDiffusionPipeline::StableDiffusionPipeline(const std::string& root_dir)
@@ -274,6 +319,14 @@ void StableDiffusionPipeline::set_scheduler(std::shared_ptr<Scheduler> scheduler
     m_impl->set_scheduler(scheduler);
 }
 
+StableDiffusionPipeline::GenerationConfig StableDiffusionPipeline::get_generation_config() const {
+    return m_impl->get_generation_config();
+}
+
+void StableDiffusionPipeline::set_generation_config(const GenerationConfig& generation_config) const {
+    m_impl->set_generation_config(generation_config);
+}
+
 void StableDiffusionPipeline::reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) {
     m_impl->reshape(num_images_per_prompt, height, width, guidance_scale);
 }
@@ -286,14 +339,6 @@ void StableDiffusionPipeline::apply_lora(const std::string& lora_path, float alp
     m_impl->apply_lora(lora_path, alpha);
 }
 
-ov::Tensor StableDiffusionPipeline::generate(
-    const std::string& positive_prompt,
-    const std::string& negative_prompt,
-    float guidance_scale,
-    int64_t height,
-    int64_t width,
-    size_t num_inference_steps,
-    size_t num_images_per_prompt) {
-    return m_impl->generate(positive_prompt, negative_prompt, guidance_scale,
-        height, width, num_inference_steps, num_images_per_prompt);
+ov::Tensor StableDiffusionPipeline::generate(const std::string& positive_prompt, const ov::AnyMap& generation_config) {
+    return m_impl->generate(positive_prompt, generation_config);
 }

@@ -3,6 +3,7 @@
 
 #include <filesystem>
 #include <iostream>
+#include <fstream>
 #include <string>
 
 #include "cxxopts.hpp"
@@ -12,6 +13,32 @@
 #include "openvino/runtime/properties.hpp"
 
 #include "diffusers/stable_diffusion_pipeline.hpp"
+
+class FromFileGenerator : public Generator {
+public:
+    explicit FromFileGenerator(const std::string& latent_file_name) {
+        m_latent_file.open(latent_file_name, std::ios::ate);
+        OPENVINO_ASSERT(m_latent_file.is_open(), "Cannot open ", latent_file_name);
+
+        m_current_pos = 0;
+        m_file_size = m_latent_file.tellg() / sizeof(float);
+        m_latent_file.seekg(0, std::ios::beg);
+    }
+
+    virtual float next() override {
+        OPENVINO_ASSERT(m_file_size >= m_current_pos,
+                        "Cannot generate latents initial tensor with pregenerated latents file. File size is small");
+
+        float number;
+        m_latent_file >> number;
+
+        return number;
+    }
+
+private:
+    std::ifstream m_latent_file;
+    size_t m_file_size, m_current_pos;
+};
 
 int32_t main(int32_t argc, char* argv[]) try {
     cxxopts::Options options("stable_diffusion", "Stable Diffusion implementation in C++ using OpenVINO\n");
@@ -89,8 +116,17 @@ int32_t main(int32_t argc, char* argv[]) try {
     // by default DDIM is used, let's override to LMSDiscreteScheduler
     pipe.set_scheduler(Scheduler::from_config(models_path + "/scheduler/scheduler_config.json", SchedulerType::LMS_DISCRETE));
 
-    ov::Tensor generated_images = pipe.generate(positive_prompt, negative_prompt, guidance_scale,
-        height, width, num_inference_steps, num_images_per_prompt);
+    StableDiffusionPipeline::GenerationConfig default_generation_config = pipe.get_generation_config(); 
+    if (read_np_latent)
+        default_generation_config.random_generator = std::make_shared<FromFileGenerator>("../np_latents_512x512.txt");
+    default_generation_config.negative_prompt = negative_prompt;
+    default_generation_config.num_inference_steps = num_inference_steps;
+    default_generation_config.guidance_scale = guidance_scale;
+    default_generation_config.num_images_per_prompt = num_images_per_prompt;
+    default_generation_config.width = width;
+    default_generation_config.height = height;
+
+    ov::Tensor generated_images = pipe.generate(positive_prompt, generation_config(default_generation_config));
 
     for (size_t n = 0; n < num_images_per_prompt; ++n) {
         ov::Shape gen_shape = generated_images.get_shape();

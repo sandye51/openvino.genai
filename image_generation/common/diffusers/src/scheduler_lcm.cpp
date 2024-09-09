@@ -219,8 +219,10 @@ std::map<std::string, ov::Tensor> LCMScheduler::step(ov::Tensor noise_pred, ov::
         std::copy_n(denoised_data, denoised.get_size(), prev_sample_data);
     }
 
-    std::map<std::string, ov::Tensor> result{{"latent", prev_sample}, {"denoised", denoised}};
-    return result;
+    return {
+        {"latent", prev_sample},
+        {"denoised", denoised}
+    };
 }
 
 std::vector<int64_t> LCMScheduler::get_timesteps() const {
