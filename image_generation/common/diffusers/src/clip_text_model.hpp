@@ -59,37 +59,34 @@ public:
         const int32_t pad_token_id = m_clip_tokenizer.get_pad_token_id();
         const size_t text_embedding_batch_size = do_classifier_free_guidance ? 2 : 1;
 
-        auto compute_text_embeddings = [&](const std::string& prompt, ov::Tensor encoder_output_tensor) {
-            ov::Tensor input_ids(ov::element::i32, {1, m_config.max_position_embeddings});
+        auto perform_tokenization = [&](const std::string& prompt, ov::Tensor input_ids) {
             std::fill_n(input_ids.data<int32_t>(), input_ids.get_size(), pad_token_id);
 
-            // tokenization
             ov::Tensor input_ids_token = m_clip_tokenizer.encode(prompt).input_ids;
             std::copy_n(input_ids_token.data<std::int64_t>(), input_ids_token.get_size(), input_ids.data<std::int32_t>());
-
-            // text embeddings
-            m_request.set_tensor("input_ids", input_ids);
-            m_request.set_output_tensor(0, encoder_output_tensor);
-            m_request.infer();
         };
 
-        ov::Tensor text_embeddings(ov::element::f32, {text_embedding_batch_size, m_config.max_position_embeddings, m_config.hidden_size});
-
+        ov::Tensor input_ids(ov::element::i32, {text_embedding_batch_size, m_config.max_position_embeddings});
         size_t current_batch_idx = 0;
+
         if (do_classifier_free_guidance) {
-            compute_text_embeddings(neg_prompt,
-                                    ov::Tensor(text_embeddings, {current_batch_idx, 0, 0},
-                                                                {current_batch_idx + 1, m_config.max_position_embeddings, m_config.hidden_size}));
+            perform_tokenization(neg_prompt,
+                                 ov::Tensor(input_ids, {current_batch_idx    , 0},
+                                                       {current_batch_idx + 1, m_config.max_position_embeddings}));
             ++current_batch_idx;
         } else {
             // Negative prompt is ignored when --guidanceScale < 1.0
         }
 
-        compute_text_embeddings(pos_prompt,
-                                ov::Tensor(text_embeddings, {current_batch_idx, 0, 0},
-                                                            {current_batch_idx + 1, m_config.max_position_embeddings, m_config.hidden_size}));
+        perform_tokenization(pos_prompt,
+                             ov::Tensor(input_ids, {current_batch_idx    , 0},
+                                                   {current_batch_idx + 1, m_config.max_position_embeddings}));
 
-        return text_embeddings;
+        // text embeddings
+        m_request.set_tensor("input_ids", input_ids);
+        m_request.infer();
+
+        return m_request.get_output_tensor(0);
     }
 
 private:

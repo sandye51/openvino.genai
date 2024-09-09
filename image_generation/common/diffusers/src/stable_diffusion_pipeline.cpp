@@ -135,10 +135,11 @@ public:
         m_scheduler = scheduler;
     }
 
-    void reshape(const int batch_size, const int height, const int width) {
-        m_clip_text_encoder->reshape(batch_size);
-        m_unet->reshape(batch_size, height, width, m_clip_text_encoder->get_config().max_position_embeddings);
-        m_vae_decoder->reshape(height, width);
+    void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) {
+        const size_t batch_size_multiplier = do_classifier_free_guidance(guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
+        m_clip_text_encoder->reshape(batch_size_multiplier);
+        m_unet->reshape(num_images_per_prompt * batch_size_multiplier, height, width, m_clip_text_encoder->get_config().max_position_embeddings);
+        m_vae_decoder->reshape(num_images_per_prompt, height, width);
     }
 
     void compile(const std::string& device, const ov::AnyMap& properties) {
@@ -166,10 +167,8 @@ public:
         // Stable Diffusion pipeline
         // see https://huggingface.co/docs/diffusers/using-diffusers/write_own_pipeline#deconstruct-the-stable-diffusion-pipeline
 
-        const size_t batch_size = num_images_per_prompt;
         const auto& unet_config = m_unet->get_config();
-        const bool do_classifier_free_guidance = guidance_scale > 1.0 && unet_config.time_cond_proj_dim < 0;
-        const size_t batch_size_multiplier = do_classifier_free_guidance ? 2 : 1;  // Unet accepts 2x batch in case of CFG
+        const size_t batch_size_multiplier = do_classifier_free_guidance(guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
         const size_t vae_scale_factor = m_unet->get_vae_scale_factor();
 
         // TODO: drop these variables
@@ -181,7 +180,8 @@ public:
         if (width < 0)
             width = unet_config.sample_size * vae_scale_factor;
 
-        ov::Tensor encoder_hidden_states = m_clip_text_encoder->forward(positive_prompt, negative_prompt, do_classifier_free_guidance);
+        ov::Tensor encoder_hidden_states = m_clip_text_encoder->forward(positive_prompt, negative_prompt,
+            do_classifier_free_guidance(guidance_scale));
         m_unet->set_hidden_states("encoder_hidden_states", encoder_hidden_states);
 
         if (unet_config.time_cond_proj_dim >= 0) {
@@ -197,9 +197,9 @@ public:
             std::uint32_t seed = user_seed + n;
 
             // latents are multiplied by 'init_noise_sigma'
-            ov::Shape latent_shape = ov::Shape{batch_size, unet_config.in_channels, height / vae_scale_factor, width / vae_scale_factor};
-            ov::Shape latent_shape_cfg = latent_shape;
+            ov::Shape latent_shape = ov::Shape{num_images_per_prompt, unet_config.in_channels, height / vae_scale_factor, width / vae_scale_factor};
             ov::Tensor noise = randn_tensor(latent_shape, read_np_latent, seed);
+            ov::Shape latent_shape_cfg = latent_shape;
             latent_shape_cfg[0] *= batch_size_multiplier;
 
             ov::Tensor latent(ov::element::f32, latent_shape), latent_cfg(ov::element::f32, latent_shape_cfg);
@@ -211,7 +211,7 @@ public:
                 // concat the same latent twice along a batch dimension in case of CFG
                 latent.copy_to(
                     ov::Tensor(latent_cfg, {0, 0, 0, 0}, {1, latent_shape[1], latent_shape[2], latent_shape[3]}));
-                if (do_classifier_free_guidance) {
+                if (batch_size_multiplier > 1) {
                     latent.copy_to(
                         ov::Tensor(latent_cfg, {1, 0, 0, 0}, {2, latent_shape[1], latent_shape[2], latent_shape[3]}));
                 }
@@ -222,11 +222,11 @@ public:
                 ov::Tensor noise_pred_tensor = m_unet->forward(latent_cfg, timestep);
 
                 ov::Shape noise_pred_shape = noise_pred_tensor.get_shape();
-                noise_pred_shape[0] = batch_size;
+                noise_pred_shape[0] = num_images_per_prompt;
 
                 ov::Tensor noisy_residual(noise_pred_tensor.get_element_type(), noise_pred_shape);
 
-                if (do_classifier_free_guidance) {
+                if (batch_size_multiplier > 1) {
                     // perform guidance
                     const float* noise_pred_uncond = noise_pred_tensor.data<const float>();
                     const float* noise_pred_text = noise_pred_uncond + ov::shape_size(noise_pred_shape);
@@ -252,6 +252,10 @@ public:
     }
 
 private:
+    bool do_classifier_free_guidance(float guidance_scale) const {
+        return guidance_scale > 1.0 && m_unet->get_config().time_cond_proj_dim < 0;
+    }
+
     std::shared_ptr<Scheduler> m_scheduler;
     std::shared_ptr<CLIPTextModel> m_clip_text_encoder;
     std::shared_ptr<UNet2DConditionModel> m_unet;
@@ -270,8 +274,8 @@ void StableDiffusionPipeline::set_scheduler(std::shared_ptr<Scheduler> scheduler
     m_impl->set_scheduler(scheduler);
 }
 
-void StableDiffusionPipeline::reshape(const int batch_size, const int height, const int width) {
-    m_impl->reshape(batch_size, height, width);
+void StableDiffusionPipeline::reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) {
+    m_impl->reshape(num_images_per_prompt, height, width, guidance_scale);
 }
 
 void StableDiffusionPipeline::compile(const std::string& device, const ov::AnyMap& properties) {

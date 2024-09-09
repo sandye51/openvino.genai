@@ -67,11 +67,10 @@ public:
         m_model.reset();
     }
 
-    void reshape(int height, int width) {
+    void reshape(int batch_size, int height, int width) {
         OPENVINO_ASSERT(m_model, "Model has been already compiled");
 
         const size_t vae_scale_factor = std::pow(2, m_config.block_out_channels.size() - 1);
-        const size_t batch_size = 1;
 
         height /= vae_scale_factor;
         width /= vae_scale_factor;

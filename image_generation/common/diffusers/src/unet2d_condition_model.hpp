@@ -73,10 +73,6 @@ public:
     void reshape(int batch_size, int height, int width, int tokenizer_model_max_length) {
         OPENVINO_ASSERT(m_model, "Model has been already compiled");
 
-        // TODO: what if it's disabled?
-        // The factor of 2 comes from the guidance scale > 1
-        batch_size *= m_config.time_cond_proj_dim <= 0 ? 2 : 1;
-
         height /= m_vae_scale_factor;
         width /= m_vae_scale_factor;
 

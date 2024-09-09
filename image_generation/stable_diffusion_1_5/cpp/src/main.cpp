@@ -83,7 +83,7 @@ int32_t main(int32_t argc, char* argv[]) try {
 
     StableDiffusionPipeline pipe(models_path);
     if (!use_dynamic_shapes)
-        pipe.reshape(num_images_per_prompt, height, width);
+        pipe.reshape(num_images_per_prompt, height, width, guidance_scale);
     pipe.compile(device, properties);
 
     // by default DDIM is used, let's override to LMSDiscreteScheduler

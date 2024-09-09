@@ -18,7 +18,7 @@ public:
     void set_scheduler(std::shared_ptr<Scheduler> scheduler);
 
     // with static shapes performance is better
-    void reshape(const int batch_size, const int height, const int width);
+    void reshape(const int batch_size, const int height, const int width, const float guidance_scale);
 
     void compile(const std::string& device, const ov::AnyMap& properties = {});
 
