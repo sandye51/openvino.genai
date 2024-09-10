@@ -40,6 +40,30 @@ private:
     size_t m_file_size, m_current_pos;
 };
 
+class ManualTimer {
+    double m_total;
+    decltype(std::chrono::steady_clock::now()) m_start;
+    std::string m_title;
+public:
+    ManualTimer(const std::string& title) :
+        m_total(0.),
+        m_title(title) {
+    }
+
+    void start() {
+        m_start = std::chrono::steady_clock::now();
+    }
+
+    void end() {
+        auto m_end = std::chrono::steady_clock::now();
+        m_total += std::chrono::duration<double, std::milli>(m_end - m_start).count();
+    }
+
+    ~ManualTimer() {
+        std::cout << m_title << ": " << m_total / 1000. << " secs" << std::endl;
+    }
+};
+
 int32_t main(int32_t argc, char* argv[]) try {
     cxxopts::Options options("stable_diffusion", "Stable Diffusion implementation in C++ using OpenVINO\n");
 
@@ -108,13 +132,25 @@ int32_t main(int32_t argc, char* argv[]) try {
     if (use_cache)
         properties.insert(ov::cache_dir("./cache_dir"));
 
+    ManualTimer creation("creation");
+    creation.start();
     StableDiffusionPipeline pipe(models_path);
-    if (!use_dynamic_shapes)
+    creation.end();
+
+    if (!use_dynamic_shapes) {
+        ManualTimer reshape("reshape");
+        reshape.start();
         pipe.reshape(num_images_per_prompt, height, width, guidance_scale);
+        reshape.end();
+    }
+
+    ManualTimer compile("compile");
+    compile.start();
     pipe.compile(device, properties);
+    compile.end();
 
     // by default DDIM is used, let's override to LMSDiscreteScheduler
-    // pipe.set_scheduler(Scheduler::from_config(models_path + "/scheduler/scheduler_config.json", SchedulerType::LMS_DISCRETE));
+    pipe.set_scheduler(Scheduler::from_config(models_path + "/scheduler/scheduler_config.json", SchedulerType::LMS_DISCRETE));
 
     StableDiffusionPipeline::GenerationConfig default_generation_config = pipe.get_generation_config(); 
     if (read_np_latent)
@@ -126,7 +162,10 @@ int32_t main(int32_t argc, char* argv[]) try {
     default_generation_config.width = width;
     default_generation_config.height = height;
 
+    ManualTimer generate("generate");
+    generate.start();
     ov::Tensor generated_images = pipe.generate(positive_prompt, generation_config(default_generation_config));
+    generate.end();
 
     for (size_t n = 0; n < num_images_per_prompt; ++n) {
         ov::Shape gen_shape = generated_images.get_shape();
