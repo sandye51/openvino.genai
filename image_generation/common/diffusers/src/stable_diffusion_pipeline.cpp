@@ -46,9 +46,6 @@ void batch_copy(ov::Tensor src, ov::Tensor dst, size_t src_batch, size_t dst_bat
     dst_start[0] = dst_batch;
     dst_end[0] = dst_batch + batch_size;
 
-    // std::cout << "src " << src_shape << " " << src_start << " " << src_end << std::endl;
-    // std::cout << "dst " << dst_shape << " " << dst_start << " " << dst_end << std::endl;
-
     ov::Tensor(src, src_start, src_end).copy_to(ov::Tensor(dst, dst_start, dst_end));
 }
 
@@ -212,8 +209,6 @@ public:
         const size_t batch_size_multiplier = do_classifier_free_guidance(generation_config.guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
         const size_t vae_scale_factor = m_unet->get_vae_scale_factor();
 
-        std::cout << "batch_size_multiplier = " << batch_size_multiplier << std::endl;
-
         if (generation_config.height < 0)
             generation_config.height = unet_config.sample_size * vae_scale_factor;
         if (generation_config.width < 0)
@@ -228,8 +223,6 @@ public:
         ov::Tensor encoder_hidden_states = m_clip_text_encoder->forward(positive_prompt, generation_config.negative_prompt,
             batch_size_multiplier > 1);
 
-        size_t actual_batch_size = generation_config.num_images_per_prompt * batch_size_multiplier;
-
         // replicate encoder hidden state to UNet model
         if (generation_config.num_images_per_prompt == 1) {
             // reuse output of text encoder directly w/o extra memory copy
@@ -240,16 +233,14 @@ public:
 
             ov::Tensor encoder_hidden_states_repeated(encoder_hidden_states.get_element_type(), enc_shape);
             for (size_t n = 0; n < generation_config.num_images_per_prompt; ++n) {
-                batch_copy(encoder_hidden_states, encoder_hidden_states_repeated,
-                    0, n * batch_size_multiplier, batch_size_multiplier);
+                batch_copy(encoder_hidden_states, encoder_hidden_states_repeated, 0, n);
+                if (batch_size_multiplier > 1) {
+                    batch_copy(encoder_hidden_states, encoder_hidden_states_repeated,
+                        1, generation_config.num_images_per_prompt + n);
+                }
             }
 
-            // m_unet->set_hidden_states("encoder_hidden_states", encoder_hidden_states_repeated);
-
-            m_unet->set_hidden_states("encoder_hidden_states",
-                ov::Tensor(encoder_hidden_states_repeated,
-                    {0, 0, 0},
-                    {actual_batch_size, enc_shape[1], enc_shape[2]}));
+            m_unet->set_hidden_states("encoder_hidden_states", encoder_hidden_states_repeated);
         }
 
         if (unet_config.time_cond_proj_dim >= 0) {
@@ -273,13 +264,10 @@ public:
 
         ov::Tensor denoised, noisy_residual_tensor(ov::element::f32, {});
         for (size_t inference_step = 0; inference_step < generation_config.num_inference_steps; inference_step++) {
-            // std::cout << "!" << std::endl;
             // concat the same latent twice along a batch dimension in case of CFG
             if (batch_size_multiplier > 1) {
-                for (size_t n = 0; n < generation_config.num_images_per_prompt; ++n) {
-                    batch_copy(latent, latent_cfg, 0, n * batch_size_multiplier + 0);
-                    batch_copy(latent, latent_cfg, 0, n * batch_size_multiplier + 1);
-                }
+                batch_copy(latent, latent_cfg, 0, 0, generation_config.num_images_per_prompt);
+                batch_copy(latent, latent_cfg, 0, generation_config.num_images_per_prompt, generation_config.num_images_per_prompt);
             } else {
                 // just assign to save memory copy
                 latent_cfg = latent;
@@ -288,28 +276,7 @@ public:
             m_scheduler->scale_model_input(latent_cfg, inference_step);
 
             ov::Tensor timestep(ov::element::i64, {1}, &timesteps[inference_step]);
-
-            std::cout << "input " << inference_step << std::endl;
-            for (size_t i = 0; i < 10; ++i) {
-                std::cout << latent_cfg.data<float>()[i] << " ";
-            }
-            std::cout << std::endl;
-
-            ov::Tensor noise_pred_tensor(ov::element::f32,
-                {generation_config.num_images_per_prompt * batch_size_multiplier, latent_shape[1], latent_shape[2], latent_shape[3]});
-            for (size_t n = 0; n < 1; ++n) {
-                ov::Tensor roi(latent_cfg,
-                    {0, 0, 0, 0},
-                    {actual_batch_size, latent_shape[1], latent_shape[2], latent_shape[3]});
-                ov::Tensor noise_pred_tensor_l = m_unet->forward(roi, timestep);
-                std::copy_n(noise_pred_tensor_l.data<float>(), noise_pred_tensor_l.get_size(),
-                    noise_pred_tensor.data<float>() + noise_pred_tensor_l.get_size() * n);
-            }
-            std::cout << "output " << inference_step << std::endl;
-            for (size_t i = 0; i < 10; ++i) {
-                std::cout << noise_pred_tensor.data<float>()[i] << " ";
-            }
-            std::cout << std::endl;
+            ov::Tensor noise_pred_tensor = m_unet->forward(latent_cfg, timestep);
 
             ov::Shape noise_pred_shape = noise_pred_tensor.get_shape();
             noise_pred_shape[0] /= batch_size_multiplier;
@@ -317,12 +284,11 @@ public:
 
             if (batch_size_multiplier > 1) {
                 // perform guidance
-                size_t latent_size = noisy_residual_tensor.get_size() / generation_config.num_images_per_prompt;
                 float* noisy_residual = noisy_residual_tensor.data<float>();
                 const float* noise_pred_uncond = noise_pred_tensor.data<const float>();
-                const float* noise_pred_text = noise_pred_uncond + latent_size;
+                const float* noise_pred_text = noise_pred_uncond + noisy_residual_tensor.get_size();
 
-                for (size_t i = 0; i < latent_size; ++i) {
+                for (size_t i = 0; i < noisy_residual_tensor.get_size(); ++i) {
                     noisy_residual[i] = noise_pred_uncond[i] +
                         generation_config.guidance_scale * (noise_pred_text[i] - noise_pred_uncond[i]);
                 }
