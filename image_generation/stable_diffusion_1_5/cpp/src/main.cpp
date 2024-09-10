@@ -150,7 +150,7 @@ int32_t main(int32_t argc, char* argv[]) try {
     compile.end();
 
     // by default DDIM is used, let's override to LMSDiscreteScheduler
-    // pipe.set_scheduler(Scheduler::from_config(models_path + "/scheduler/scheduler_config.json", SchedulerType::LMS_DISCRETE));
+    pipe.set_scheduler(Scheduler::from_config(models_path + "/scheduler/scheduler_config.json", SchedulerType::LMS_DISCRETE));
 
     StableDiffusionPipeline::GenerationConfig default_generation_config = pipe.get_generation_config(); 
     if (read_np_latent)
@@ -167,7 +167,7 @@ int32_t main(int32_t argc, char* argv[]) try {
     ov::Tensor generated_images = pipe.generate(positive_prompt, generation_config(default_generation_config));
     generate.end();
 
-    for (size_t n = 0; n < 1; ++n) {
+    for (size_t n = 0; n < num_images_per_prompt; ++n) {
         ov::Shape gen_shape = generated_images.get_shape();
         size_t gen_width = gen_shape[2], gen_height = gen_shape[1];
 
