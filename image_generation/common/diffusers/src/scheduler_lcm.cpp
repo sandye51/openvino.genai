@@ -137,8 +137,8 @@ void LCMScheduler::set_timesteps(size_t num_inference_steps) {
 }
 
 std::map<std::string, ov::Tensor> LCMScheduler::step(ov::Tensor noise_pred, ov::Tensor latents, size_t inference_step) {
-    ov::Tensor timestep(ov::element::i64, {1}, &m_timesteps[inference_step]);
-
+    ov::Shape shape = latents.get_shape();
+    size_t batch_size = shape[0], latent_size = ov::shape_size(shape) / batch_size;
     float* noise_pred_data = noise_pred.data<float>();
     float* latents_data = latents.data<float>();
 
@@ -162,28 +162,39 @@ std::map<std::string, ov::Tensor> LCMScheduler::step(ov::Tensor noise_pred, ov::
     float c_out = scaled_timestep / std::sqrt((std::pow(scaled_timestep, 2) + std::pow(m_sigma_data, 2)));
 
     // 4. Compute the predicted original sample x_0 based on the model parameterization
-    std::vector<float> predicted_original_sample(latents.get_size());
+    std::vector<std::vector<float>> predicted_original_sample(batch_size);
     // "epsilon" by default
     if (m_config.prediction_type == PredictionType::EPSILON) {
-        for (std::size_t i = 0; i < latents.get_size(); ++i) {
-            predicted_original_sample[i] = (latents_data[i] - beta_prod_t_sqrt * noise_pred_data[i]) / alpha_prod_t_sqrt;
+        for (std::size_t i = 0; i < batch_size; ++i) {
+            std::vector<float>& predicted_original_sample_l = predicted_original_sample[i];
+            predicted_original_sample_l.resize(latent_size);
+
+            for (std::size_t j = 0; j < latent_size; ++j)
+                predicted_original_sample_l[j] = (latents_data[i * latent_size + j] -
+                    beta_prod_t_sqrt * noise_pred_data[i * latent_size + j]) / alpha_prod_t_sqrt;
         }
     }
 
     // 5. Clip or threshold "predicted x_0"
     if (m_config.thresholding) {
-        predicted_original_sample = threshold_sample(predicted_original_sample);
+        for (std::size_t i = 0; i < batch_size; ++i) {
+            predicted_original_sample[i] = threshold_sample(predicted_original_sample[i]);
+        }
     } else if (m_config.clip_sample) {
-        for (float& value : predicted_original_sample) {
-            value = std::clamp(value, - m_config.clip_sample_range, m_config.clip_sample_range);
+        for (std::size_t i = 0; i < batch_size; ++i) {
+            for (float& value : predicted_original_sample[i]) {
+                value = std::clamp(value, - m_config.clip_sample_range, m_config.clip_sample_range);
+            }
         }
     }
 
     // 6. Denoise model output using boundary conditions
     ov::Tensor denoised(latents.get_element_type(), latents.get_shape());
     float* denoised_data = denoised.data<float>();
-    for (std::size_t i = 0; i < denoised.get_size(); ++i) {
-        denoised_data[i] = c_out * predicted_original_sample[i] + c_skip * latents_data[i];
+    for (std::size_t i = 0; i < batch_size; ++i) {
+        for (std::size_t j = 0; j < latent_size; ++j) {
+            denoised_data[i * latent_size + j] = c_out * predicted_original_sample[i][j] + c_skip * latents_data[i * latent_size + j];
+        }
     }
 
     /// 7. Sample and inject noise z ~ N(0, I) for MultiStep Inference
@@ -193,7 +204,7 @@ std::map<std::string, ov::Tensor> LCMScheduler::step(ov::Tensor noise_pred, ov::
     float* prev_sample_data = prev_sample.data<float>();
 
     if (inference_step != m_num_inference_steps - 1) {
-        for (std::size_t i = 0; i < noise_pred.get_size(); ++i) {
+        for (std::size_t i = 0; i < batch_size * latent_size; ++i) {
             float gen_noise = m_normal(m_gen);
             prev_sample_data[i] = alpha_prod_t_prev_sqrt * denoised_data[i] + beta_prod_t_prev_sqrt * gen_noise;
         }
@@ -238,7 +249,7 @@ std::vector<float> LCMScheduler::threshold_sample(const std::vector<float>& flat
     // Calculate s, the quantile threshold
     std::sort(abs_sample.begin(), abs_sample.end());
     const int s_index = std::min(static_cast<int>(std::round(m_config.dynamic_thresholding_ratio * flat_sample.size())),
-                                static_cast<int>(flat_sample.size()) - 1);
+                                 static_cast<int>(flat_sample.size()) - 1);
     float s = abs_sample[s_index];
     s = std::clamp(s, 1.0f, m_config.sample_max_value);
 
