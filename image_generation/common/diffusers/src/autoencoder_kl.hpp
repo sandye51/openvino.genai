@@ -76,7 +76,7 @@ public:
         width /= vae_scale_factor;
 
         ov::PartialShape input_shape = m_model->input(0).get_partial_shape();
-        std::map<size_t, ov::PartialShape> idx_to_shape{{0, {batch_size, input_shape[1], height, width}}};
+        std::map<size_t, ov::PartialShape> idx_to_shape{{0, {1, input_shape[1], height, width}}};
         m_model->reshape(idx_to_shape);
     }
 

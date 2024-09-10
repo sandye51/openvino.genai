@@ -199,7 +199,7 @@ std::map<std::string, ov::Tensor> LMSDiscreteScheduler::step(ov::Tensor noise_pr
                 pred_latent = noise_pred.data<float>()[j];
                 break;
             case PredictionType::V_PREDICTION:
-            // pred_original_sample = model_output * (-sigma / (sigma**2 + 1) ** 0.5) + (sample / (sigma**2 + 1))
+                // pred_original_sample = model_output * (-sigma / (sigma**2 + 1) ** 0.5) + (sample / (sigma**2 + 1))
                 pred_latent = noise_pred.data<float>()[j] * (-sigma / std::sqrtf(sigma * sigma + 1.0f) + 
                     latents.data<float>()[j] / (sigma * sigma + 1.0f));
                 break;

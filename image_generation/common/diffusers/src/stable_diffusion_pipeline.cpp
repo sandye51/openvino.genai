@@ -35,6 +35,23 @@ ov::Tensor get_guidance_scale_embedding(float guidance_scale, uint32_t embedding
     return w_embedding;
 }
 
+void batch_copy(ov::Tensor src, ov::Tensor dst, size_t src_batch, size_t dst_batch, size_t batch_size = 1) {
+    const ov::Shape src_shape = src.get_shape(), dst_shape = dst.get_shape();
+    ov::Coordinate src_start(src_shape.size(), 0), src_end = src_shape;
+    ov::Coordinate dst_start(dst_shape.size(), 0), dst_end = dst_shape;
+
+    src_start[0] = src_batch;
+    src_end[0] = src_batch + batch_size;
+
+    dst_start[0] = dst_batch;
+    dst_end[0] = dst_batch + batch_size;
+
+    std::cout << "src " << src_shape << " " << src_start << " " << src_end << std::endl;
+    std::cout << "dst " << dst_shape << " " << dst_start << " " << dst_end << std::endl;
+
+    ov::Tensor(src, src_start, src_end).copy_to(ov::Tensor(dst, dst_start, dst_end));
+}
+
 // TODO: remove duplication with utils.hpp
 template <typename T>
 void read_anymap_param(const ov::AnyMap& config_map, const std::string& name, T& param) {
@@ -188,14 +205,14 @@ public:
         GenerationConfig generation_config = m_generation_config;
         generation_config.update_generation_config(properties);
 
-        OPENVINO_ASSERT(generation_config.num_images_per_prompt == 1, "Currently only num_images_per_prompt = 1 is supported");
-
         // Stable Diffusion pipeline
         // see https://huggingface.co/docs/diffusers/using-diffusers/write_own_pipeline#deconstruct-the-stable-diffusion-pipeline
 
         const auto& unet_config = m_unet->get_config();
         const size_t batch_size_multiplier = do_classifier_free_guidance(generation_config.guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
         const size_t vae_scale_factor = m_unet->get_vae_scale_factor();
+
+        std::cout << "batch_size_multiplier = " << batch_size_multiplier << std::endl;
 
         if (generation_config.height < 0)
             generation_config.height = unet_config.sample_size * vae_scale_factor;
@@ -210,7 +227,29 @@ public:
 
         ov::Tensor encoder_hidden_states = m_clip_text_encoder->forward(positive_prompt, generation_config.negative_prompt,
             batch_size_multiplier > 1);
-        m_unet->set_hidden_states("encoder_hidden_states", encoder_hidden_states);
+
+        // replicate encoder hidden state to UNet model
+        // if (generation_config.num_images_per_prompt == 1) {
+        //     // reuse output of text encoder directly w/o extra memory copy
+            m_unet->set_hidden_states("encoder_hidden_states", encoder_hidden_states);
+        // } else 
+        // if (0)
+        // {
+        //     ov::Shape enc_shape = encoder_hidden_states.get_shape();
+        //     // enc_shape[0] *= generation_config.num_images_per_prompt;
+        //     std::cout << "!!" << enc_shape[0] << std::endl;
+
+        //     ov::Tensor encoder_hidden_states_repeated(encoder_hidden_states.get_element_type(), enc_shape);
+        //     for (size_t n = 0; n < enc_shape[0]; ++n) {
+        //         batch_copy(encoder_hidden_states, encoder_hidden_states_repeated, 0, n);
+        //         // if (batch_size_multiplier > 1) {
+        //         //     batch_copy(encoder_hidden_states, encoder_hidden_states_repeated,
+        //         //         1, generation_config.num_images_per_prompt + n);
+        //         // }
+        //     }
+
+        //     m_unet->set_hidden_states("encoder_hidden_states", encoder_hidden_states_repeated);
+        // }
 
         if (unet_config.time_cond_proj_dim >= 0) {
             ov::Tensor guidance_scale_embedding = get_guidance_scale_embedding(generation_config.guidance_scale, unet_config.time_cond_proj_dim);
@@ -220,61 +259,73 @@ public:
         m_scheduler->set_timesteps(generation_config.num_inference_steps);
         std::vector<std::int64_t> timesteps = m_scheduler->get_timesteps();
 
-        ov::Tensor denoised;
-        for (uint32_t n = 0; n < generation_config.num_images_per_prompt; n++) {
-            // latents are multiplied by 'init_noise_sigma'
-            ov::Shape latent_shape{generation_config.num_images_per_prompt, unet_config.in_channels,
-                                   generation_config.height / vae_scale_factor, generation_config.width / vae_scale_factor};
-            ov::Shape latent_shape_cfg = latent_shape;
-            latent_shape_cfg[0] *= batch_size_multiplier;
+        // latents are multiplied by 'init_noise_sigma'
+        ov::Shape latent_shape{generation_config.num_images_per_prompt, unet_config.in_channels,
+                               generation_config.height / vae_scale_factor, generation_config.width / vae_scale_factor};
+        ov::Shape latent_shape_cfg = latent_shape;
+        latent_shape_cfg[0] *= 1;
 
-            ov::Tensor latent(ov::element::f32, latent_shape), latent_cfg(ov::element::f32, latent_shape_cfg);
-            std::generate_n(latent.data<float>(), latent.get_size(), [&]() -> float {
-                return generation_config.random_generator->next() * m_scheduler->get_init_noise_sigma();
-            });
+        ov::Tensor latent(ov::element::f32, latent_shape), latent_cfg(ov::element::f32, latent_shape_cfg);
+        std::generate_n(latent.data<float>(), latent.get_size(), [&]() -> float {
+            return generation_config.random_generator->next() * m_scheduler->get_init_noise_sigma();
+        });
 
-            for (size_t inference_step = 0; inference_step < generation_config.num_inference_steps; inference_step++) {
-                // concat the same latent twice along a batch dimension in case of CFG
-                latent.copy_to(
-                    ov::Tensor(latent_cfg, {0, 0, 0, 0}, {1, latent_shape[1], latent_shape[2], latent_shape[3]}));
-                if (batch_size_multiplier > 1) {
-                    latent.copy_to(
-                        ov::Tensor(latent_cfg, {1, 0, 0, 0}, {2, latent_shape[1], latent_shape[2], latent_shape[3]}));
-                }
+        // for (size_t n = 1; n < generation_config.num_images_per_prompt; ++n) {
+        //     batch_copy(latent, latent, 0, n);
+        // }
 
-                m_scheduler->scale_model_input(latent_cfg, inference_step);
+        ov::Tensor denoised, noisy_residual_tensor(ov::element::f32, {});
+        for (size_t inference_step = 0; inference_step < generation_config.num_inference_steps; inference_step++) {
+            // concat the same latent twice along a batch dimension in case of CFG
+            // batch_copy(latent, latent_cfg, 0, 0, generation_config.num_images_per_prompt);
+            // if (batch_size_multiplier > 1) {
+            //     batch_copy(latent, latent_cfg,
+            //         /* src_offset */ 0,
+            //         /* dst_offset */ generation_config.num_images_per_prompt,
+            //         /* batches to copy */ generation_config.num_images_per_prompt);
+            // }
+            latent_cfg = latent;
 
-                ov::Tensor timestep(ov::element::i64, {1}, &timesteps[inference_step]);
-                ov::Tensor noise_pred_tensor = m_unet->forward(latent_cfg, timestep);
+            m_scheduler->scale_model_input(latent_cfg, inference_step);
 
-                ov::Shape noise_pred_shape = noise_pred_tensor.get_shape();
-                noise_pred_shape[0] = generation_config.num_images_per_prompt;
-
-                ov::Tensor noisy_residual(noise_pred_tensor.get_element_type(), noise_pred_shape);
-
-                if (batch_size_multiplier > 1) {
-                    // perform guidance
-                    const float* noise_pred_uncond = noise_pred_tensor.data<const float>();
-                    const float* noise_pred_text = noise_pred_uncond + ov::shape_size(noise_pred_shape);
-
-                    for (size_t i = 0; i < ov::shape_size(noise_pred_shape); ++i) {
-                        noisy_residual.data<float>()[i] =
-                            noise_pred_uncond[i] + generation_config.guidance_scale * (noise_pred_text[i] - noise_pred_uncond[i]);
-                    }
-                } else {
-                    noisy_residual = noise_pred_tensor;
-                }
-
-                auto scheduler_step_result = m_scheduler->step(noisy_residual, latent, inference_step);
-                latent = scheduler_step_result["latent"];
-
-                // check whether scheduler returns "denoised" image, which should be passed to VAE decoder
-                const auto it = scheduler_step_result.find("denoised");
-                denoised = it != scheduler_step_result.end() ? it->second : latent;
+            ov::Tensor timestep(ov::element::i64, {1}, &timesteps[inference_step]);
+            
+            ov::Tensor noise_pred_tensor(ov::element::f32,
+                {generation_config.num_images_per_prompt, latent_shape[1], latent_shape[2], latent_shape[3]});
+            for (size_t n = 0; n < 1; ++n) {
+                ov::Tensor roi(latent_cfg, {n, 0, 0, 0}, {n+1, latent_shape[1], latent_shape[2], latent_shape[3]});
+                ov::Tensor noise_pred_tensor_l = m_unet->forward(roi, timestep);
+                std::copy_n(noise_pred_tensor_l.data<float>(), noise_pred_tensor_l.get_size(),
+                    noise_pred_tensor.data<float>() + noise_pred_tensor_l.get_size() * n);
             }
+
+            ov::Shape noise_pred_shape = noise_pred_tensor.get_shape();
+            noise_pred_shape[0] /= batch_size_multiplier;
+            noisy_residual_tensor.set_shape(noise_pred_shape);
+
+            if (batch_size_multiplier > 1) {
+                // perform guidance
+                // float* noisy_residual = noisy_residual_tensor.data<float>();
+                // const float* noise_pred_uncond = noise_pred_tensor.data<const float>();
+                // const float* noise_pred_text = noise_pred_uncond + noisy_residual_tensor.get_size();
+
+                // for (size_t i = 0; i < noisy_residual_tensor.get_size(); ++i) {
+                //     noisy_residual[i] = noise_pred_uncond[i] +
+                //         generation_config.guidance_scale * (noise_pred_text[i] - noise_pred_uncond[i]);
+                // }
+            } else {
+                noisy_residual_tensor = noise_pred_tensor;
+            }
+
+            auto scheduler_step_result = m_scheduler->step(noisy_residual_tensor, latent, inference_step);
+            latent = scheduler_step_result["latent"];
+
+            // check whether scheduler returns "denoised" image, which should be passed to VAE decoder
+            const auto it = scheduler_step_result.find("denoised");
+            denoised = it != scheduler_step_result.end() ? it->second : latent;
         }
 
-        return m_vae_decoder->forward(denoised);
+        return m_vae_decoder->forward(ov::Tensor(denoised, {0, 0, 0, 0}, {1, latent_shape[1], latent_shape[2], latent_shape[3]}));
     }
 
 private:
