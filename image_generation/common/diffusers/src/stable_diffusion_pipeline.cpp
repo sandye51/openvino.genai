@@ -4,6 +4,7 @@
 #include "diffusers/stable_diffusion_pipeline.hpp"
 
 #include <ctime>
+#include <cassert>
 
 #include "clip_text_model.hpp"
 #include "unet2d_condition_model.hpp"
@@ -153,6 +154,8 @@ public:
     }
 
     void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) {
+        check_inputs(height, width);
+
         const size_t batch_size_multiplier = do_classifier_free_guidance(guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
         m_clip_text_encoder->reshape(batch_size_multiplier);
         m_unet->reshape(num_images_per_prompt * batch_size_multiplier, height, width, m_clip_text_encoder->get_config().max_position_embeddings);
@@ -198,6 +201,7 @@ public:
             generation_config.height = unet_config.sample_size * vae_scale_factor;
         if (generation_config.width < 0)
             generation_config.width = unet_config.sample_size * vae_scale_factor;
+        check_inputs(generation_config.height, generation_config.width);
 
         if (generation_config.random_generator == nullptr) {
             uint32_t seed = time(NULL);
@@ -279,7 +283,7 @@ private:
     }
 
     void initialize_generation_config(const std::string& class_name) {
-        OPENVINO_ASSERT(m_unet, "UNet model must be initialized first");
+        assert(m_unet != nullptr);
         const auto& unet_config = m_unet->get_config();
         const size_t vae_scale_factor = m_unet->get_vae_scale_factor();
 
@@ -298,6 +302,14 @@ private:
         } else {
             OPENVINO_THROW("Unsupported class_name '", class_name, "'. Please, contact OpenVINO GenAI developers");
         }
+    }
+
+    void check_inputs(const int height, const int width) const {
+        assert(m_unet != nullptr);
+        const size_t vae_scale_factor = m_unet->get_vae_scale_factor();
+        OPENVINO_ASSERT((height % vae_scale_factor == 0 || height < 0) &&
+            (width % vae_scale_factor == 0 || width < 0), "Both 'width' and 'height' must be divisible by",
+            vae_scale_factor);
     }
 
     std::shared_ptr<Scheduler> m_scheduler;
