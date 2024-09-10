@@ -36,6 +36,10 @@ private:
 class StableDiffusionPipeline {
 public:
     struct GenerationConfig {
+        // LCM: promp only w/o negative prompt
+        // SD XL: prompt2 and negative_prompt2
+        // FLUX: prompt2 (prompt if prompt2 is not defined explicitly)
+        // SD 3: prompt2, prompt3 (with fallback to prompt) and negative_prompt2, negative_prompt3
         std::string negative_prompt;
         size_t num_images_per_prompt = 1;
 
@@ -77,7 +81,7 @@ public:
     void apply_lora(const std::string& lora_path, float alpha);
 
     // Returns a tensor with the following dimensions [num_images_per_prompt, height, width, 3]
-    ov::Tensor generate(const std::string& positive_prompt, const ov::AnyMap& generation_config = {});
+    ov::Tensor generate(const std::string& positive_prompt, const ov::AnyMap& properties = {});
 
     template <typename... Properties>
     ov::util::EnableIfAllStringAny<ov::Tensor, Properties...> generate(

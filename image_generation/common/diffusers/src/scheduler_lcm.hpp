@@ -27,7 +27,7 @@ public:
         bool thresholding = false;
         float dynamic_thresholding_ratio = 0.995f;
         float sample_max_value = 1.0f;
-        // std::string timestep_spacing = "leading";
+        TimestepSpacing timestep_spacing = TimestepSpacing::LEADING;
         float timestep_scaling = 10.0f;
         bool rescale_betas_zero_snr = false;
 

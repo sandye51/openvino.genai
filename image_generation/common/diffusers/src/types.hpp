@@ -21,6 +21,12 @@ enum class PredictionType {
     V_PREDICTION
 };
 
+enum class TimestepSpacing {
+    LINSPACE,
+    TRAILING,
+    LEADING
+};
+
 std::ostream& operator<<(std::ostream& os, const SchedulerType& scheduler_type);
 
 namespace ov {
@@ -35,6 +41,9 @@ void read_json_param(const nlohmann::json& data, const std::string& name, Predic
 
 template <>
 void read_json_param(const nlohmann::json& data, const std::string& name, SchedulerType& param);
+
+template <>
+void read_json_param(const nlohmann::json& data, const std::string& name, TimestepSpacing& param);
 
 }  // namespace utils
 }  // namespace genai

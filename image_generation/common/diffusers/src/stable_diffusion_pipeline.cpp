@@ -329,6 +329,12 @@ private:
         } else if (class_name == "LatentConsistencyModelPipeline") {
             m_generation_config.guidance_scale = 7.5f;
             m_generation_config.num_inference_steps = 50;
+        } else if (class_name == "FluxPipeline") {
+            m_generation_config.guidance_scale = 3.5f;
+            m_generation_config.num_inference_steps = 28;
+        } else if (class_name == "StableDiffusion3Pipeline") {
+            m_generation_config.guidance_scale = 7.0f;
+            m_generation_config.num_inference_steps = 28;
         } else {
             OPENVINO_THROW("Unsupported class_name '", class_name, "'. Please, contact OpenVINO GenAI developers");
         }
@@ -381,6 +387,6 @@ void StableDiffusionPipeline::apply_lora(const std::string& lora_path, float alp
     m_impl->apply_lora(lora_path, alpha);
 }
 
-ov::Tensor StableDiffusionPipeline::generate(const std::string& positive_prompt, const ov::AnyMap& generation_config) {
-    return m_impl->generate(positive_prompt, generation_config);
+ov::Tensor StableDiffusionPipeline::generate(const std::string& positive_prompt, const ov::AnyMap& properties) {
+    return m_impl->generate(positive_prompt, properties);
 }

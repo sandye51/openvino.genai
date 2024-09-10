@@ -53,8 +53,7 @@ LCMScheduler::Config::Config(const std::string scheduler_config_path) {
     read_json_param(data, "trained_betas", trained_betas);
     read_json_param(data, "beta_schedule", beta_schedule);
     read_json_param(data, "prediction_type", prediction_type);
-    // not currently used
-    // read_json_param(data, "timestep_spacing", timestep_spacing);
+    read_json_param(data, "timestep_spacing", timestep_spacing);
 }
 
 LCMScheduler::LCMScheduler(const std::string scheduler_config_path) :

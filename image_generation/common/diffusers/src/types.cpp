@@ -56,6 +56,22 @@ void read_json_param(const nlohmann::json& data, const std::string& name, Schedu
     }
 }
 
+template <>
+void read_json_param(const nlohmann::json& data, const std::string& name, TimestepSpacing& param) {
+    if (data.contains(name) && data[name].is_string()) {
+        std::string timestep_spacing_str = data[name].get<std::string>();
+        if (timestep_spacing_str == "linspace")
+            param = TimestepSpacing::LINSPACE;
+        else if (timestep_spacing_str == "trailing")
+            param = TimestepSpacing::TRAILING;
+        else if (timestep_spacing_str == "leading")
+            param = TimestepSpacing::LEADING;
+        else if (!timestep_spacing_str.empty()) {
+            OPENVINO_THROW("Unsupported value for 'timestep_spacing' ", timestep_spacing_str);
+        }
+    }
+}
+
 }  // namespace utils
 }  // namespace genai
 }  // namespace ov

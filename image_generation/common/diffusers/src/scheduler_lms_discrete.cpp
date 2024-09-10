@@ -49,8 +49,8 @@ Real trapezoidal(F f, Real a, Real b, Real tol = 1e-6, int max_refinements = 100
     return I0;
 }
 
-float lms_derivative_function(float tau, int32_t order, int32_t curr_order, const std::vector<float>& sigma_vec, int32_t t) {
-    float prod = 1.0;
+float lms_derivative(float tau, int32_t order, int32_t curr_order, const std::vector<float>& sigma_vec, int32_t t) {
+    float prod = 1.0f;
 
     for (int32_t k = 0; k < order; k++) {
         if (curr_order == k) {
@@ -102,6 +102,7 @@ LMSDiscreteScheduler::Config::Config(const std::string& scheduler_config_path) {
     read_json_param(data, "beta_schedule", beta_schedule);
     read_json_param(data, "prediction_type", prediction_type);
     read_json_param(data, "num_train_timesteps", num_train_timesteps);
+    read_json_param(data, "steps_offset", steps_offset);
 }
 
 LMSDiscreteScheduler::LMSDiscreteScheduler(const std::string scheduler_config_path) 
@@ -110,44 +111,45 @@ LMSDiscreteScheduler::LMSDiscreteScheduler(const std::string scheduler_config_pa
 
 LMSDiscreteScheduler::LMSDiscreteScheduler(const Config& scheduler_config)
     : m_config(scheduler_config) {
-    std::vector<float> alphas, betas;
-
     if (!m_config.trained_betas.empty()) {
-        betas = m_config.trained_betas;
+        m_betas = m_config.trained_betas;
     } else if (m_config.beta_schedule == BetaSchedule::LINEAR) {
-        for (int32_t i = 0; i < m_config.num_train_timesteps; i++) {
-            betas.push_back(m_config.beta_start + (m_config.beta_end - m_config.beta_start) * i / (m_config.num_train_timesteps - 1));
-        }
+        m_betas = linspace<float>(m_config.beta_start, m_config.beta_end, m_config.num_train_timesteps);
     } else if (m_config.beta_schedule == BetaSchedule::SCALED_LINEAR) {
         float start = std::sqrt(m_config.beta_start);
         float end = std::sqrt(m_config.beta_end);
-        std::vector<float> temp = linspace(start, end, m_config.num_train_timesteps);
-        for (float b : temp) {
-            betas.push_back(b * b);
-        }
+        m_betas = linspace<float>(start, end, m_config.num_train_timesteps);
+        std::for_each(m_betas.begin(), m_betas.end(), [] (float & x) { x *= x; });
     } else {
-        OPENVINO_THROW("'beta_schedule' must be one of 'EPSILON' or 'SCALED_LINEAR'");
+        OPENVINO_THROW("'beta_schedule' must be one of 'EPSILON' or 'SCALED_LINEAR'. Please, add support of other types");
     }
 
-    for (float b : betas) {
-        alphas.push_back(1.0f - b);
-    }
+    // generates alphas
+    std::transform(m_betas.begin(), m_betas.end(), std::back_inserter(m_alphas), [] (float b) { return 1.0f - b; });
 
     std::vector<float> log_sigma_vec;
-    for (size_t i = 1; i <= alphas.size(); i++) {
+    for (size_t i = 1; i <= m_alphas.size(); i++) {
         float alphas_cumprod =
-            std::accumulate(alphas.begin(), alphas.begin() + i, 1.0f, std::multiplies<float>{});
+            std::accumulate(m_alphas.begin(), m_alphas.begin() + i, 1.0f, std::multiplies<float>{});
         float sigma = std::sqrt((1 - alphas_cumprod) / alphas_cumprod);
         m_log_sigmas.push_back(std::log(sigma));
     }
 }
 
 float LMSDiscreteScheduler::get_init_noise_sigma() const {
-    return m_sigmas[0];
+    float max_sigma = *std::max_element(m_sigmas.begin(), m_sigmas.end());
+
+    if (m_config.timestep_spacing == TimestepSpacing::LINSPACE ||
+        m_config.timestep_spacing == TimestepSpacing::TRAILING) {
+        return max_sigma;
+    }
+ 
+    return std::sqrt(max_sigma * max_sigma + 1);
 }
 
 void LMSDiscreteScheduler::scale_model_input(ov::Tensor sample, size_t inference_step) {
     const double scale = 1.0 / std::sqrt((m_sigmas[inference_step] * m_sigmas[inference_step] + 1));
+
     float* sample_data = sample.data<float>();
     for (size_t i = 0; i < sample.get_size(); i++) {
         sample_data[i] *= scale;
@@ -155,6 +157,9 @@ void LMSDiscreteScheduler::scale_model_input(ov::Tensor sample, size_t inference
 }
 
 void LMSDiscreteScheduler::set_timesteps(size_t num_inference_steps) {
+    m_timesteps.clear();
+    m_derivative_list.clear();
+
     float delta = -999.0f / (num_inference_steps - 1);
     // transform interpolation to time range
     for (size_t i = 0; i < num_inference_steps; i++) {
@@ -165,8 +170,9 @@ void LMSDiscreteScheduler::set_timesteps(size_t num_inference_steps) {
         float sigma = std::exp((1 - w) * m_log_sigmas[low_idx] + w * m_log_sigmas[high_idx]);
         m_sigmas.push_back(sigma);
     }
-    m_sigmas.push_back(0.f);
 
+    m_sigmas.push_back(0.f);
+ 
     // initialize timesteps
     for (size_t i = 0; i < num_inference_steps; ++i) {
         int64_t timestep = _sigma_to_t(m_sigmas[i]);
@@ -179,15 +185,12 @@ std::vector<int64_t> LMSDiscreteScheduler::get_timesteps() const {
 }
 
 std::map<std::string, ov::Tensor> LMSDiscreteScheduler::step(ov::Tensor noise_pred, ov::Tensor latents, size_t inference_step) {
-    if (inference_step == 0) {
-        m_derivative_list.clear();
-    }
+    const float sigma = m_sigmas[inference_step];
 
     // LMS step function:
     std::vector<float> derivative;
     derivative.reserve(latents.get_size());
 
-    const float sigma = m_sigmas[inference_step];
     for (size_t j = 0; j < latents.get_size(); j++) {
         // 1. compute predicted original sample (x_0) from sigma-scaled predicted noise
         float pred_latent = 0;
@@ -223,8 +226,9 @@ std::map<std::string, ov::Tensor> LMSDiscreteScheduler::step(ov::Tensor noise_pr
     std::vector<float> lms_coeffs(order);
     for (size_t curr_order = 0; curr_order < order; curr_order++) {
         auto lms_derivative_functor = [order, curr_order, sigmas = this->m_sigmas, inference_step] (float tau) {
-            return lms_derivative_function(tau, order, curr_order, sigmas, inference_step);
+            return lms_derivative(tau, order, curr_order, sigmas, inference_step);
         };
+        // integrated_coeff = integrate.quad(lms_derivative, self.sigmas[t], self.sigmas[t + 1], epsrel=1e-4)[0]
         lms_coeffs[curr_order] = trapezoidal(lms_derivative_functor, static_cast<double>(sigma), static_cast<double>(m_sigmas[inference_step + 1]), 1e-4);
     }
 

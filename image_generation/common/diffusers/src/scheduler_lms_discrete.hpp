@@ -17,6 +17,8 @@ public:
         BetaSchedule beta_schedule = BetaSchedule::SCALED_LINEAR;
         PredictionType prediction_type = PredictionType::EPSILON;
         std::vector<float> trained_betas = {};
+        TimestepSpacing timestep_spacing = TimestepSpacing::LINSPACE;
+        size_t steps_offset = 0;
 
         Config() = default;
         explicit Config(const std::string& scheduler_config_path);
@@ -38,8 +40,8 @@ public:
 private:
     Config m_config;
 
-    std::vector<float> m_log_sigmas;
-    std::vector<float> m_sigmas;
+    std::vector<float> m_alphas, m_betas, m_alphas_cumprod;
+    std::vector<float> m_sigmas, m_log_sigmas;
     std::vector<int64_t> m_timesteps;
     std::list<std::vector<float>> m_derivative_list;
 
