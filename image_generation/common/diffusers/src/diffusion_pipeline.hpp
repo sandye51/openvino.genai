@@ -3,7 +3,7 @@
 
 #include <fstream>
 
-#include "diffusers/text2image_pipeline.hpp"
+#include "schedulers/ischeduler.hpp"
 
 #include "utils.hpp"
 
@@ -57,7 +57,9 @@ public:
     }
 
     void set_scheduler(std::shared_ptr<Scheduler> scheduler) {
-        m_scheduler = scheduler;
+        auto casted = std::dynamic_pointer_cast<IScheduler>(scheduler);
+        OPENVINO_ASSERT(casted != nullptr, "Passed incorrect scheduler type");
+        m_scheduler = casted;
     }
 
     virtual void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) = 0;
@@ -75,6 +77,6 @@ protected:
 
     virtual void check_inputs(const int height, const int width) const = 0;
 
-    std::shared_ptr<Scheduler> m_scheduler;
+    std::shared_ptr<IScheduler> m_scheduler;
     Text2ImagePipeline::GenerationConfig m_generation_config;
 };

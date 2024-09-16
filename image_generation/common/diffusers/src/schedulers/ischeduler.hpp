@@ -8,17 +8,10 @@
 
 #include "openvino/runtime/tensor.hpp"
 
-enum class SchedulerType {
-    AUTO = 0,
-    LCM = 1,
-    LMS_DISCRETE = 2,
-};
+#include "diffusers/text2image_pipeline.hpp"
 
-class Scheduler {
+class IScheduler : public Text2ImagePipeline::Scheduler {
 public:
-    static std::shared_ptr<Scheduler> from_config(const std::string& scheduler_config_path,
-                                                  SchedulerType scheduler_type = SchedulerType::AUTO);
-
     virtual void set_timesteps(size_t num_inference_steps) = 0;
 
     virtual std::vector<std::int64_t> get_timesteps() const = 0;

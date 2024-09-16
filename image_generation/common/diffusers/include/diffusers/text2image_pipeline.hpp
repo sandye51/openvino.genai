@@ -16,8 +16,6 @@
 #include "diffusers/unet2d_condition_model.hpp"
 #include "diffusers/autoencoder_kl.hpp"
 
-#include "diffusers/scheduler.hpp"
-
 class Generator {
 public:
     using Ptr = std::shared_ptr<Generator>;
@@ -41,10 +39,24 @@ class Text2ImagePipeline {
 public:
     enum Type {
         STABLE_DIFFUSION,
-        LCM,
         STABLE_DIFFUSION_XL,
         STABLE_DIFFUSION_3,
         FLUX,
+        LCM,
+    };
+
+    class Scheduler {
+    public:
+        enum Type {
+            AUTO,
+            LCM,
+            LMS_DISCRETE
+        };
+
+        static std::shared_ptr<Scheduler> from_config(const std::string& scheduler_config_path,
+                                                      Type scheduler_type = AUTO);
+
+        virtual ~Scheduler();
     };
 
     struct GenerationConfig {
@@ -82,7 +94,10 @@ public:
     Text2ImagePipeline(const std::string& root_dir, const std::string& device, const ov::AnyMap& properties = {});
 
     // creates either LCM or SD pipeline from building blocks
-    Text2ImagePipeline(Type type, const CLIPTextModel& clip_text_encoder, const UNet2DConditionModel& unet, const AutoencoderKL& vae_decoder);
+    Text2ImagePipeline(Type pipeline_type, std::shared_ptr<Scheduler> scheduler_type,
+                       const CLIPTextModel& clip_text_encoder,
+                       const UNet2DConditionModel& unet,
+                       const AutoencoderKL& vae_decoder);
 
     GenerationConfig get_generation_config() const;
     void set_generation_config(const GenerationConfig& generation_config);

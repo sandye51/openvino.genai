@@ -150,7 +150,8 @@ int32_t main(int32_t argc, char* argv[]) try {
     compile.end();
 
     // by default DDIM is used, let's override to LMSDiscreteScheduler
-    pipe.set_scheduler(Scheduler::from_config(models_path + "/scheduler/scheduler_config.json", SchedulerType::LMS_DISCRETE));
+    pipe.set_scheduler(Text2ImagePipeline::Scheduler::from_config(models_path + "/scheduler/scheduler_config.json",
+        Text2ImagePipeline::Scheduler::Type::LMS_DISCRETE));
 
     Text2ImagePipeline::GenerationConfig default_generation_config = pipe.get_generation_config(); 
     if (read_np_latent)

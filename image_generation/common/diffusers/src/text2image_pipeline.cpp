@@ -66,8 +66,11 @@ Text2ImagePipeline::Text2ImagePipeline(const std::string& root_dir, const std::s
     }
 }
 
-Text2ImagePipeline::Text2ImagePipeline(Type type, const CLIPTextModel& clip_text_encoder, const UNet2DConditionModel& unet, const AutoencoderKL& vae_decoder) {
-    switch (type) {
+Text2ImagePipeline::Text2ImagePipeline(Type pipeline_type, std::shared_ptr<Scheduler> scheduler,
+                                       const CLIPTextModel& clip_text_encoder,
+                                       const UNet2DConditionModel& unet,
+                                       const AutoencoderKL& vae_decoder) {
+    switch (pipeline_type) {
         case Type::LCM:
         case Type::STABLE_DIFFUSION:
             m_impl = std::make_shared<StableDiffusionPipeline>(clip_text_encoder, unet, vae_decoder);
@@ -75,6 +78,9 @@ Text2ImagePipeline::Text2ImagePipeline(Type type, const CLIPTextModel& clip_text
         default:
             OPENVINO_THROW("Unsupported pipeline type");
     };
+
+    assert(scheduler != nullptr);
+    m_impl->set_scheduler(scheduler);
 }
 
 Text2ImagePipeline::GenerationConfig Text2ImagePipeline::get_generation_config() const {

@@ -5,7 +5,7 @@
 
 #include <ostream>
 
-#include "diffusers/scheduler.hpp"
+#include "diffusers/text2image_pipeline.hpp"
 
 #include "utils.hpp"
 
@@ -27,7 +27,9 @@ enum class TimestepSpacing {
     LEADING
 };
 
-std::ostream& operator<<(std::ostream& os, const SchedulerType& scheduler_type);
+std::ostream& operator<<(std::ostream& os, const Text2ImagePipeline::Type& scheduler_type);
+
+std::ostream& operator<<(std::ostream& os, const Text2ImagePipeline::Scheduler::Type& scheduler_type);
 
 namespace ov {
 namespace genai {
@@ -40,7 +42,7 @@ template <>
 void read_json_param(const nlohmann::json& data, const std::string& name, PredictionType& param);
 
 template <>
-void read_json_param(const nlohmann::json& data, const std::string& name, SchedulerType& param);
+void read_json_param(const nlohmann::json& data, const std::string& name, Text2ImagePipeline::Scheduler::Type& param);
 
 template <>
 void read_json_param(const nlohmann::json& data, const std::string& name, TimestepSpacing& param);

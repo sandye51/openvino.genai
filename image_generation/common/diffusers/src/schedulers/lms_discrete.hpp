@@ -7,9 +7,9 @@
 #include <string>
 
 #include "types.hpp"
-#include "diffusers/scheduler.hpp"
+#include "schedulers/ischeduler.hpp"
 
-class LMSDiscreteScheduler : public Scheduler {
+class LMSDiscreteScheduler : public IScheduler {
 public:
     struct Config {
         int32_t num_train_timesteps = 1000;

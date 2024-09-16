@@ -6,7 +6,7 @@
 #include <fstream>
 #include <iterator>
 
-#include "scheduler_lcm.hpp"
+#include "schedulers/lcm.hpp"
 
 // https://gist.github.com/lorenzoriano/5414671
 template <typename T, typename U>

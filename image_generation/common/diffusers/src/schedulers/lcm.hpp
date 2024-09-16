@@ -8,9 +8,9 @@
 #include <vector>
 
 #include "types.hpp"
-#include "diffusers/scheduler.hpp"
+#include "schedulers/ischeduler.hpp"
 
-class LCMScheduler : public Scheduler {
+class LCMScheduler : public IScheduler {
 public:
     // values from https://github.com/huggingface/diffusers/blob/main/src/diffusers/schedulers/scheduling_lcm.py#L190
     struct Config {

@@ -1,7 +1,7 @@
 // Copyright (C) 2023-2024 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-#include "types.hpp"
+#include "schedulers/types.hpp"
 
 namespace ov {
 namespace genai {
@@ -40,16 +40,16 @@ void read_json_param(const nlohmann::json& data, const std::string& name, Predic
 }
 
 template <>
-void read_json_param(const nlohmann::json& data, const std::string& name, SchedulerType& param) {
+void read_json_param(const nlohmann::json& data, const std::string& name, Text2ImagePipeline::Scheduler::Type& param) {
     if (data.contains(name) && data[name].is_string()) {
         std::string scheduler_type_str = data[name].get<std::string>();
         if (scheduler_type_str == "LCMScheduler")
-            param = SchedulerType::LCM;
+            param = Text2ImagePipeline::Scheduler::LCM;
         else if (scheduler_type_str == "DDIMScheduler")
             // TODO: remove this TMP workaround
-            param = SchedulerType::LMS_DISCRETE;
+            param = Text2ImagePipeline::Scheduler::LMS_DISCRETE;
         else if (scheduler_type_str == "LMSDiscreteScheduler")
-            param = SchedulerType::LMS_DISCRETE;
+            param = Text2ImagePipeline::Scheduler::LMS_DISCRETE;
         else if (!scheduler_type_str.empty()) {
             OPENVINO_THROW("Unsupported value for 'prediction_type' ", scheduler_type_str);
         }
@@ -76,13 +76,13 @@ void read_json_param(const nlohmann::json& data, const std::string& name, Timest
 }  // namespace genai
 }  // namespace ov
 
-std::ostream& operator<<(std::ostream& os, const SchedulerType& scheduler_type) {
+std::ostream& operator<<(std::ostream& os, const Text2ImagePipeline::Scheduler::Type& scheduler_type) {
     switch (scheduler_type) {
-    case SchedulerType::LCM:
+    case Text2ImagePipeline::Scheduler::Type::LCM:
         return os << "LCMScheduler";
-    case SchedulerType::LMS_DISCRETE:
+    case Text2ImagePipeline::Scheduler::Type::LMS_DISCRETE:
         return os << "LMSDiscreteScheduler";
-    case SchedulerType::AUTO:
+    case Text2ImagePipeline::Scheduler::Type::AUTO:
         return os << "AutoScheduler";
     default:
         OPENVINO_THROW("Unsupported scheduler type value");

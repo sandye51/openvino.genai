@@ -47,7 +47,7 @@ public:
         nlohmann::json data = nlohmann::json::parse(file);
         using ov::genai::utils::read_json_param;
 
-        m_scheduler = Scheduler::from_config(root_dir + "/scheduler/scheduler_config.json");
+        set_scheduler(Scheduler::from_config(root_dir + "/scheduler/scheduler_config.json"));
 
         const std::string text_encoder = data["text_encoder"][1].get<std::string>();
         if (text_encoder == "CLIPTextModel") {
@@ -82,7 +82,7 @@ public:
         nlohmann::json data = nlohmann::json::parse(file);
         using ov::genai::utils::read_json_param;
 
-        m_scheduler = Scheduler::from_config(root_dir + "/scheduler/scheduler_config.json");
+        set_scheduler(Scheduler::from_config(root_dir + "/scheduler/scheduler_config.json"));
 
         const std::string text_encoder = data["text_encoder"][1].get<std::string>();
         if (text_encoder == "CLIPTextModel") {
