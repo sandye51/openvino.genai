@@ -7,7 +7,7 @@
 #include "openvino/core/version.hpp"
 #include "openvino/runtime/properties.hpp"
 
-#include "diffusers/stable_diffusion_pipeline.hpp"
+#include "diffusers/text2image_pipeline.hpp"
 
 #include "cxxopts.hpp"
 #include "imwrite.hpp"
@@ -78,7 +78,7 @@ int32_t main(int32_t argc, char* argv[]) try {
     if (use_cache)
         properties.insert(ov::cache_dir("./cache_dir"));
 
-    StableDiffusionPipeline pipe(models_path, device, properties);
+    Text2ImagePipeline pipe(models_path, device, properties);
 
     ov::Tensor generated_images = pipe.generate(positive_prompt, "", guidance_scale,
         height, width, num_inference_steps, num_images_per_prompt);

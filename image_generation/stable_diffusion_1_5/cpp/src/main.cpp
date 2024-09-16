@@ -12,7 +12,7 @@
 #include "openvino/core/version.hpp"
 #include "openvino/runtime/properties.hpp"
 
-#include "diffusers/stable_diffusion_pipeline.hpp"
+#include "diffusers/text2image_pipeline.hpp"
 
 class FromFileGenerator : public Generator {
 public:
@@ -134,7 +134,7 @@ int32_t main(int32_t argc, char* argv[]) try {
 
     ManualTimer creation("creation");
     creation.start();
-    StableDiffusionPipeline pipe(models_path);
+    Text2ImagePipeline pipe(models_path);
     creation.end();
 
     if (!use_dynamic_shapes) {
@@ -152,7 +152,7 @@ int32_t main(int32_t argc, char* argv[]) try {
     // by default DDIM is used, let's override to LMSDiscreteScheduler
     pipe.set_scheduler(Scheduler::from_config(models_path + "/scheduler/scheduler_config.json", SchedulerType::LMS_DISCRETE));
 
-    StableDiffusionPipeline::GenerationConfig default_generation_config = pipe.get_generation_config(); 
+    Text2ImagePipeline::GenerationConfig default_generation_config = pipe.get_generation_config(); 
     if (read_np_latent)
         default_generation_config.random_generator = std::make_shared<FromFileGenerator>("../np_latents_512x512.txt");
     default_generation_config.negative_prompt = negative_prompt;

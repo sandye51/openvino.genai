@@ -33,14 +33,16 @@ private:
     std::normal_distribution<float> normal;
 };
 
-class StableDiffusionPipeline {
+class Text2ImagePipeline {
 public:
     struct GenerationConfig {
         // LCM: promp only w/o negative prompt
         // SD XL: prompt2 and negative_prompt2
         // FLUX: prompt2 (prompt if prompt2 is not defined explicitly)
         // SD 3: prompt2, prompt3 (with fallback to prompt) and negative_prompt2, negative_prompt3
-        std::string negative_prompt;
+        std::string prompt2, prompt3;
+        std::string negative_prompt, negative_prompt2, negative_prompt3;
+
         size_t num_images_per_prompt = 1;
 
         // random generator to have deterministic results
@@ -63,22 +65,23 @@ public:
         }
     };
 
-    explicit StableDiffusionPipeline(const std::string& root_dir);
+    explicit Text2ImagePipeline(const std::string& root_dir);
 
-    StableDiffusionPipeline(const std::string& root_dir, const std::string& device, const ov::AnyMap& properties = {});
+    Text2ImagePipeline(const std::string& root_dir, const std::string& device, const ov::AnyMap& properties = {});
+
+    GenerationConfig get_generation_config() const;
+    void set_generation_config(const GenerationConfig& generation_config);
 
     // ability to override scheduler
+    // TODO: do we need it?
     void set_scheduler(std::shared_ptr<Scheduler> scheduler);
 
     // with static shapes performance is better
     void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale);
 
-    GenerationConfig get_generation_config() const;
-    void set_generation_config(const GenerationConfig& generation_config) const;
+    void apply_lora(const std::string& lora_path, float alpha);
 
     void compile(const std::string& device, const ov::AnyMap& properties = {});
-
-    void apply_lora(const std::string& lora_path, float alpha);
 
     // Returns a tensor with the following dimensions [num_images_per_prompt, height, width, 3]
     ov::Tensor generate(const std::string& positive_prompt, const ov::AnyMap& properties = {});
@@ -91,13 +94,21 @@ public:
     }
 
 private:
-    class StableDiffusionPipelineImpl;
-    std::shared_ptr<StableDiffusionPipelineImpl> m_impl;
+    class DiffusionPipeline;
+    std::shared_ptr<DiffusionPipeline> m_impl;
+
+    class StableDiffusionPipeline;
 };
 
 static constexpr ov::Property<Generator::Ptr> random_generator{"random_generator"};
 
+static constexpr ov::Property<std::string> prompt2{"prompt2"};
+static constexpr ov::Property<std::string> prompt3{"prompt3"};
+
 static constexpr ov::Property<std::string> negative_prompt{"negative_prompt"};
+static constexpr ov::Property<std::string> negative_prompt2{"negative_prompt2"};
+static constexpr ov::Property<std::string> negative_prompt3{"negative_prompt3"};
+
 static constexpr ov::Property<size_t> num_images_per_prompt{"num_images_per_prompt"};
 
 static constexpr ov::Property<float> guidance_scale{"guidance_scale"};
@@ -106,4 +117,4 @@ static constexpr ov::Property<int64_t> width{"width"};
 static constexpr ov::Property<size_t> num_inference_steps{"num_inference_steps"};
 
 // similarly to LLMPipeline's GenerationConfig
-std::pair<std::string, ov::Any> generation_config(const StableDiffusionPipeline::GenerationConfig& generation_config);
+std::pair<std::string, ov::Any> generation_config(const Text2ImagePipeline::GenerationConfig& generation_config);
