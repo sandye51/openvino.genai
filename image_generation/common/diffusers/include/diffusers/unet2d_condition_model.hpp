@@ -46,6 +46,8 @@ public:
         compile(device, properties);
     }
 
+    UNet2DConditionModel(const UNet2DConditionModel&) = default;
+
     const Config& get_config() const {
         return m_config;
     }

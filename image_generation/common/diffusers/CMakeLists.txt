@@ -19,9 +19,7 @@ endif()
 find_package(OpenVINO REQUIRED COMPONENTS Runtime)
 find_package(OpenVINOGenAI REQUIRED)
 
-target_link_libraries(diffusers
-    PUBLIC openvino::runtime
-    PRIVATE openvino::genai)
+target_link_libraries(diffusers PUBLIC openvino::genai)
 
 include(FetchContent)
 
@@ -37,10 +35,10 @@ if(NOT TARGET nlohmann_json)
 endif()
 
 # TODO: remove after merge with openvino_genai
-target_include_directories(diffusers PRIVATE
+target_include_directories(diffusers PUBLIC
     "../../../src/cpp/src" "../../../src/cpp/include")
 
-target_link_libraries(diffusers PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(diffusers PUBLIC nlohmann_json::nlohmann_json)
 
 FetchContent_Declare(eigen3)
 FetchContent_GetProperties(eigen3)

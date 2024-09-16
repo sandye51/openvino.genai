@@ -51,6 +51,8 @@ public:
         compile(device, properties);
     }
 
+    AutoencoderKL(const AutoencoderKL&) = default;
+
     ov::Tensor forward(ov::Tensor latent) {
         OPENVINO_ASSERT(m_request, "VAE decoder model must be compiled first");
 

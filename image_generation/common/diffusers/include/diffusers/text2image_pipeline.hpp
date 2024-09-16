@@ -12,6 +12,10 @@
 #include "openvino/runtime/properties.hpp"
 #include "openvino/runtime/tensor.hpp"
 
+#include "diffusers/clip_text_model.hpp"
+#include "diffusers/unet2d_condition_model.hpp"
+#include "diffusers/autoencoder_kl.hpp"
+
 #include "diffusers/scheduler.hpp"
 
 class Generator {
@@ -35,6 +39,14 @@ private:
 
 class Text2ImagePipeline {
 public:
+    enum Type {
+        STABLE_DIFFUSION,
+        LCM,
+        STABLE_DIFFUSION_XL,
+        STABLE_DIFFUSION_3,
+        FLUX,
+    };
+
     struct GenerationConfig {
         // LCM: promp only w/o negative prompt
         // SD XL: prompt2 and negative_prompt2
@@ -68,6 +80,9 @@ public:
     explicit Text2ImagePipeline(const std::string& root_dir);
 
     Text2ImagePipeline(const std::string& root_dir, const std::string& device, const ov::AnyMap& properties = {});
+
+    // creates either LCM or SD pipeline from building blocks
+    Text2ImagePipeline(Type type, const CLIPTextModel& clip_text_encoder, const UNet2DConditionModel& unet, const AutoencoderKL& vae_decoder);
 
     GenerationConfig get_generation_config() const;
     void set_generation_config(const GenerationConfig& generation_config);

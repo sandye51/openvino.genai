@@ -43,6 +43,8 @@ public:
         compile(device, properties);
     }
 
+    CLIPTextModel(const CLIPTextModel&) = default;
+
     const Config& get_config() const {
         return m_config;
     }

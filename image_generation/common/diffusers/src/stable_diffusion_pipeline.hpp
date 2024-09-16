@@ -109,6 +109,12 @@ public:
         initialize_generation_config(data["_class_name"].get<std::string>());
     }
 
+    StableDiffusionPipeline(const CLIPTextModel& clip_text_encoder, const UNet2DConditionModel& unet, const AutoencoderKL& vae_decoder) {
+        m_clip_text_encoder = std::make_shared<CLIPTextModel>(clip_text_encoder);
+        m_unet = std::make_shared<UNet2DConditionModel>(unet);
+        m_vae_decoder = std::make_shared<AutoencoderKL>(vae_decoder);
+    }
+
     void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) override {
         check_inputs(height, width);
 
