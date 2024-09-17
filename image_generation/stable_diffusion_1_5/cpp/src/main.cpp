@@ -134,7 +134,11 @@ int32_t main(int32_t argc, char* argv[]) try {
 
     ManualTimer creation("creation");
     creation.start();
-    Text2ImagePipeline pipe(models_path);
+    auto pipe = Text2ImagePipeline::stable_diffusion(
+        Text2ImagePipeline::Scheduler::from_config(models_path + "/scheduler/scheduler_config.json", Text2ImagePipeline::Scheduler::LMS_DISCRETE),
+        CLIPTextModel(models_path + "/text_encoder"),
+        UNet2DConditionModel(models_path + "/unet"),
+        AutoencoderKL(models_path + "/vae_decoder"));
     creation.end();
 
     if (!use_dynamic_shapes) {

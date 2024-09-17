@@ -37,14 +37,6 @@ private:
 
 class Text2ImagePipeline {
 public:
-    enum Type {
-        STABLE_DIFFUSION,
-        STABLE_DIFFUSION_XL,
-        STABLE_DIFFUSION_3,
-        FLUX,
-        LCM,
-    };
-
     class Scheduler {
     public:
         enum Type {
@@ -60,7 +52,7 @@ public:
     };
 
     struct GenerationConfig {
-        // LCM: promp only w/o negative prompt
+        // LCM: prompt only w/o negative prompt
         // SD XL: prompt2 and negative_prompt2
         // FLUX: prompt2 (prompt if prompt2 is not defined explicitly)
         // SD 3: prompt2, prompt3 (with fallback to prompt) and negative_prompt2, negative_prompt3
@@ -94,22 +86,27 @@ public:
     Text2ImagePipeline(const std::string& root_dir, const std::string& device, const ov::AnyMap& properties = {});
 
     // creates either LCM or SD pipeline from building blocks
-    Text2ImagePipeline(Type pipeline_type, std::shared_ptr<Scheduler> scheduler_type,
-                       const CLIPTextModel& clip_text_encoder,
-                       const UNet2DConditionModel& unet,
-                       const AutoencoderKL& vae_decoder);
+    static Text2ImagePipeline stable_diffusion(
+        const std::shared_ptr<Scheduler>& scheduler_type,
+        const CLIPTextModel& clip_text_encoder,
+        const UNet2DConditionModel& unet,
+        const AutoencoderKL& vae_decoder);
+
+    // creates either LCM or SD pipeline from building blocks
+    static Text2ImagePipeline latent_consistency_model(
+        const std::shared_ptr<Scheduler>& scheduler_type,
+        const CLIPTextModel& clip_text_encoder,
+        const UNet2DConditionModel& unet,
+        const AutoencoderKL& vae_decoder);
 
     GenerationConfig get_generation_config() const;
     void set_generation_config(const GenerationConfig& generation_config);
 
     // ability to override scheduler
-    // TODO: do we need it?
     void set_scheduler(std::shared_ptr<Scheduler> scheduler);
 
     // with static shapes performance is better
     void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale);
-
-    void apply_lora(const std::string& lora_path, float alpha);
 
     void compile(const std::string& device, const ov::AnyMap& properties = {});
 
@@ -126,6 +123,8 @@ public:
 private:
     class DiffusionPipeline;
     std::shared_ptr<DiffusionPipeline> m_impl;
+
+    Text2ImagePipeline(const std::shared_ptr<DiffusionPipeline>& impl);
 
     class StableDiffusionPipeline;
 };

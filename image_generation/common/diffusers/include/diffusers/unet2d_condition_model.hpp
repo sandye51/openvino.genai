@@ -6,11 +6,9 @@
 #include <vector>
 #include <fstream>
 
-#include "iadapted_model.hpp"
-
 #include "utils.hpp"
 
-class UNet2DConditionModel : public IAdaptedModel {
+class UNet2DConditionModel {
 public:
     struct Config {
         size_t in_channels = 4;
@@ -33,15 +31,15 @@ public:
     };
 
     explicit UNet2DConditionModel(const std::string root_dir) :
-        IAdaptedModel(root_dir + "/unet/openvino_model.xml"),
-        m_config(root_dir + "/unet/config.json") {
+        m_config(root_dir + "/config.json") {
+        m_model = ov::Core().read_model(root_dir + "/openvino_model.xml");
         // compute VAE scale factor
         m_vae_scale_factor = std::pow(2, m_config.block_out_channels.size() - 1);
     }
 
     UNet2DConditionModel(const std::string& root_dir,
                          const std::string& device,
-                         const ov::AnyMap& properties) :
+                         const ov::AnyMap& properties = {}) :
         UNet2DConditionModel(root_dir) {
         compile(device, properties);
     }
@@ -56,24 +54,8 @@ public:
         return m_vae_scale_factor;
     }
 
-    void set_hidden_states(const std::string& tensor_name, ov::Tensor encoder_hidden_states) {
-        OPENVINO_ASSERT(m_request, "UNet model must be compiled first");
-        m_request.set_tensor(tensor_name, encoder_hidden_states);
-    }
-
-    ov::Tensor forward(ov::Tensor sample, ov::Tensor timestep) {
-        OPENVINO_ASSERT(m_request, "UNet model must be compiled first");
-
-        m_request.set_tensor("sample", sample);
-        m_request.set_tensor("timestep", timestep);
-
-        m_request.infer();
-
-        return m_request.get_output_tensor();
-    }
-
     void reshape(int batch_size, int height, int width, int tokenizer_model_max_length) {
-        OPENVINO_ASSERT(m_model, "Model has been already compiled");
+        OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot reshape already compiled model");
 
         height /= m_vae_scale_factor;
         width /= m_vae_scale_factor;
@@ -98,7 +80,33 @@ public:
         m_model->reshape(name_to_shape);
     }
 
+    void compile(const std::string& device, const ov::AnyMap& properties = {}) {
+        OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot re-compile already compiled model");
+        ov::CompiledModel compiled_model = ov::Core().compile_model(m_model, device, properties);
+        m_request = compiled_model.create_infer_request();
+        // release the original model
+        m_model.reset();
+    }
+
+    void set_hidden_states(const std::string& tensor_name, ov::Tensor encoder_hidden_states) {
+        OPENVINO_ASSERT(m_request, "UNet model must be compiled first");
+        m_request.set_tensor(tensor_name, encoder_hidden_states);
+    }
+
+    ov::Tensor forward(ov::Tensor sample, ov::Tensor timestep) {
+        OPENVINO_ASSERT(m_request, "UNet model must be compiled first. Cannot infer non-compiled model");
+
+        m_request.set_tensor("sample", sample);
+        m_request.set_tensor("timestep", timestep);
+
+        m_request.infer();
+
+        return m_request.get_output_tensor();
+    }
+
 private:
     Config m_config;
+    std::shared_ptr<ov::Model> m_model;
+    ov::InferRequest m_request;
     size_t m_vae_scale_factor;
 };

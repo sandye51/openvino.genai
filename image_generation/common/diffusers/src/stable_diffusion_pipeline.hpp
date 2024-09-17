@@ -47,7 +47,7 @@ public:
         nlohmann::json data = nlohmann::json::parse(file);
         using ov::genai::utils::read_json_param;
 
-        set_scheduler(Scheduler::from_config(root_dir + "/scheduler/scheduler_config.json"));
+        set_scheduler(Scheduler::from_config(root_dir));
 
         const std::string text_encoder = data["text_encoder"][1].get<std::string>();
         if (text_encoder == "CLIPTextModel") {
@@ -86,21 +86,21 @@ public:
 
         const std::string text_encoder = data["text_encoder"][1].get<std::string>();
         if (text_encoder == "CLIPTextModel") {
-            m_clip_text_encoder = std::make_shared<CLIPTextModel>(root_dir, device, properties);
+            m_clip_text_encoder = std::make_shared<CLIPTextModel>(root_dir + "/text_encoder", device, properties);
         } else {
             OPENVINO_THROW("Unsupported '", text_encoder, "' text encoder type");
         }
 
         const std::string unet = data["unet"][1].get<std::string>();
         if (unet == "UNet2DConditionModel") {
-            m_unet = std::make_shared<UNet2DConditionModel>(root_dir, device, properties);
+            m_unet = std::make_shared<UNet2DConditionModel>(root_dir + "/unet", device, properties);
         } else {
             OPENVINO_THROW("Unsupported '", unet, "' UNet type");
         }
 
         const std::string vae = data["vae"][1].get<std::string>();
         if (vae == "AutoencoderKL") {
-            m_vae_decoder = std::make_shared<AutoencoderKL>(root_dir, device, properties);
+            m_vae_decoder = std::make_shared<AutoencoderKL>(root_dir + "/vae_decoder", device, properties);
         } else {
             OPENVINO_THROW("Unsupported '", vae, "' VAE decoder type");
         }
@@ -122,13 +122,6 @@ public:
         m_clip_text_encoder->reshape(batch_size_multiplier);
         m_unet->reshape(num_images_per_prompt * batch_size_multiplier, height, width, m_clip_text_encoder->get_config().max_position_embeddings);
         m_vae_decoder->reshape(num_images_per_prompt, height, width);
-    }
-
-    void apply_lora(const std::string& lora_path, float alpha) override {
-        std::map<std::string, InsertLoRA::LoRAMap> lora_weights = read_lora_adapters(lora_path, alpha);
-
-        m_clip_text_encoder->apply_lora(lora_weights["text_encoder"]);
-        m_unet->apply_lora(lora_weights["unet"]);
     }
 
     void compile(const std::string& device, const ov::AnyMap& properties) override {

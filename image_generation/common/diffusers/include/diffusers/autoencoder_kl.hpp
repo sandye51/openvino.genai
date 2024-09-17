@@ -12,6 +12,7 @@
 #include "openvino/op/clamp.hpp"
 #include "openvino/op/add.hpp"
 #include "openvino/op/multiply.hpp"
+#include "openvino/op/constant.hpp"
 
 class AutoencoderKL {
 public:
@@ -38,8 +39,8 @@ public:
     };
 
     explicit AutoencoderKL(const std::string& root_dir)
-        : m_config(root_dir + "/vae_decoder/config.json") {
-        m_model = ov::Core().read_model(root_dir + "/vae_decoder/openvino_model.xml");
+        : m_config(root_dir + "/config.json") {
+        m_model = ov::Core().read_model(root_dir + "/openvino_model.xml");
         // apply VaeImageProcessor postprocessing steps by merging them into the VAE decoder model
         merge_vae_image_processor();
     }
@@ -53,24 +54,8 @@ public:
 
     AutoencoderKL(const AutoencoderKL&) = default;
 
-    ov::Tensor forward(ov::Tensor latent) {
-        OPENVINO_ASSERT(m_request, "VAE decoder model must be compiled first");
-
-        m_request.set_input_tensor(latent);
-        m_request.infer();
-        return m_request.get_output_tensor();
-    }
-
-    void compile(const std::string& device, const ov::AnyMap& properties = {}) {
-        OPENVINO_ASSERT(m_model, "Model has been already compiled");
-        ov::CompiledModel compiled_model = ov::Core().compile_model(m_model, device, properties);
-        m_request = compiled_model.create_infer_request();
-        // release the original model
-        m_model.reset();
-    }
-
     void reshape(int batch_size, int height, int width) {
-        OPENVINO_ASSERT(m_model, "Model has been already compiled");
+        OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot reshape already compiled model");
 
         const size_t vae_scale_factor = std::pow(2, m_config.block_out_channels.size() - 1);
 
@@ -80,6 +65,22 @@ public:
         ov::PartialShape input_shape = m_model->input(0).get_partial_shape();
         std::map<size_t, ov::PartialShape> idx_to_shape{{0, {batch_size, input_shape[1], height, width}}};
         m_model->reshape(idx_to_shape);
+    }
+
+    void compile(const std::string& device, const ov::AnyMap& properties = {}) {
+        OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot re-compile already compiled model");
+        ov::CompiledModel compiled_model = ov::Core().compile_model(m_model, device, properties);
+        m_request = compiled_model.create_infer_request();
+        // release the original model
+        m_model.reset();
+    }
+
+    ov::Tensor forward(ov::Tensor latent) {
+        OPENVINO_ASSERT(m_request, "VAE decoder model must be compiled first. Cannot infer non-compiled model");
+
+        m_request.set_input_tensor(latent);
+        m_request.infer();
+        return m_request.get_output_tensor();
     }
 
 private:

@@ -5,13 +5,11 @@
 
 #include <fstream>
 
-#include "iadapted_model.hpp"
-
 #include "openvino/genai/tokenizer.hpp"
 
 #include "utils.hpp"
 
-class CLIPTextModel : public IAdaptedModel {
+class CLIPTextModel {
 public:
     struct Config {
         // TODO: is it better to use tokenizer max length?
@@ -31,14 +29,14 @@ public:
     };
 
     explicit CLIPTextModel(const std::string root_dir) :
-        IAdaptedModel(root_dir + "/text_encoder/openvino_model.xml"),
-        m_clip_tokenizer(root_dir + "/tokenizer"),
-        m_config(root_dir + "/text_encoder/config.json") {
+        m_clip_tokenizer(root_dir + "/../tokenizer"),
+        m_config(root_dir + "/config.json") {
+        m_model = ov::Core().read_model(root_dir + "/openvino_model.xml");
     }
 
     CLIPTextModel(const std::string& root_dir,
                   const std::string& device,
-                  const ov::AnyMap& properties) :
+                  const ov::AnyMap& properties = {}) :
         CLIPTextModel(root_dir) {
         compile(device, properties);
     }
@@ -50,6 +48,8 @@ public:
     }
 
     void reshape(int batch_size) {
+        OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot reshape already compiled model");
+
         ov::PartialShape input_shape = m_model->input(0).get_partial_shape();
         input_shape[0] = batch_size;
         input_shape[1] = m_config.max_position_embeddings;
@@ -57,7 +57,17 @@ public:
         m_model->reshape(idx_to_shape);
     }
 
+    void compile(const std::string& device, const ov::AnyMap& properties = {}) {
+        OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot re-compile already compiled model");
+        ov::CompiledModel compiled_model = ov::Core().compile_model(m_model, device, properties);
+        m_request = compiled_model.create_infer_request();
+        // release the original model
+        m_model.reset();
+    }
+
     ov::Tensor forward(const std::string& pos_prompt, const std::string& neg_prompt, bool do_classifier_free_guidance) {
+        OPENVINO_ASSERT(m_request, "CLIP text encoder model must be compiled first. Cannot infer non-compiled model");
+
         const int32_t pad_token_id = m_clip_tokenizer.get_pad_token_id();
         const size_t text_embedding_batch_size = do_classifier_free_guidance ? 2 : 1;
 
@@ -92,6 +102,9 @@ public:
     }
 
 private:
-    ov::genai::Tokenizer m_clip_tokenizer;
     Config m_config;
+    ov::InferRequest m_request;
+    std::shared_ptr<ov::Model> m_model;
+
+    ov::genai::Tokenizer m_clip_tokenizer;
 };

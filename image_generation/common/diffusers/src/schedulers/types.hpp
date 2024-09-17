@@ -27,8 +27,6 @@ enum class TimestepSpacing {
     LEADING
 };
 
-std::ostream& operator<<(std::ostream& os, const Text2ImagePipeline::Type& scheduler_type);
-
 std::ostream& operator<<(std::ostream& os, const Text2ImagePipeline::Scheduler::Type& scheduler_type);
 
 namespace ov {

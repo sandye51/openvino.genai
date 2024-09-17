@@ -66,21 +66,28 @@ Text2ImagePipeline::Text2ImagePipeline(const std::string& root_dir, const std::s
     }
 }
 
-Text2ImagePipeline::Text2ImagePipeline(Type pipeline_type, std::shared_ptr<Scheduler> scheduler,
-                                       const CLIPTextModel& clip_text_encoder,
-                                       const UNet2DConditionModel& unet,
-                                       const AutoencoderKL& vae_decoder) {
-    switch (pipeline_type) {
-        case Type::LCM:
-        case Type::STABLE_DIFFUSION:
-            m_impl = std::make_shared<StableDiffusionPipeline>(clip_text_encoder, unet, vae_decoder);
-            break;
-        default:
-            OPENVINO_THROW("Unsupported pipeline type");
-    };
+Text2ImagePipeline::Text2ImagePipeline(const std::shared_ptr<DiffusionPipeline>& impl) 
+    : m_impl(impl) { }
+
+Text2ImagePipeline Text2ImagePipeline::stable_diffusion(
+    const std::shared_ptr<Scheduler>& scheduler,
+    const CLIPTextModel& clip_text_encoder,
+    const UNet2DConditionModel& unet,
+    const AutoencoderKL& vae_decoder) {
+    auto impl = std::make_shared<StableDiffusionPipeline>(clip_text_encoder, unet, vae_decoder);
 
     assert(scheduler != nullptr);
-    m_impl->set_scheduler(scheduler);
+    impl->set_scheduler(scheduler);
+
+    return Text2ImagePipeline(impl);
+}
+
+Text2ImagePipeline Text2ImagePipeline::latent_consistency_model(
+    const std::shared_ptr<Scheduler>& scheduler,
+    const CLIPTextModel& clip_text_encoder,
+    const UNet2DConditionModel& unet,
+    const AutoencoderKL& vae_decoder) {
+    return stable_diffusion(scheduler, clip_text_encoder, unet, vae_decoder);
 }
 
 Text2ImagePipeline::GenerationConfig Text2ImagePipeline::get_generation_config() const {
@@ -93,10 +100,6 @@ void Text2ImagePipeline::set_generation_config(const GenerationConfig& generatio
 
 void Text2ImagePipeline::set_scheduler(std::shared_ptr<Scheduler> scheduler) {
     m_impl->set_scheduler(scheduler);
-}
-
-void Text2ImagePipeline::apply_lora(const std::string& lora_path, float alpha) {
-    m_impl->apply_lora(lora_path, alpha);
 }
 
 void Text2ImagePipeline::reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) {
