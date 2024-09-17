@@ -118,7 +118,11 @@ public:
         const std::shared_ptr<AutoencoderKL>& vae_decoder)
         : m_clip_text_encoder(m_clip_text_encoder),
           m_unet(m_unet),
-          m_vae_decoder(m_vae_decoder) { }
+          m_vae_decoder(m_vae_decoder) {
+        assert(m_clip_text_encoder != nullptr);
+        assert(m_unet != nullptr);
+        assert(m_vae_decoder != nullptr);
+    }
 
     void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) override {
         check_inputs(height, width);

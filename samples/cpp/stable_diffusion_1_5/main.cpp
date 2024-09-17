@@ -143,21 +143,21 @@ int32_t main(int32_t argc, char* argv[]) try {
         autoencoder_kl(models_path + "/vae_decoder", "CPU", ov::cache_dir("./")));
     creation.end();
 
-    if (!use_dynamic_shapes) {
-        ManualTimer reshape("reshape");
-        reshape.start();
-        pipe.reshape(num_images_per_prompt, height, width, guidance_scale);
-        reshape.end();
-    }
+    // if (!use_dynamic_shapes) {
+    //     ManualTimer reshape("reshape");
+    //     reshape.start();
+    //     pipe.reshape(num_images_per_prompt, height, width, guidance_scale);
+    //     reshape.end();
+    // }
 
-    ManualTimer compile("compile");
-    compile.start();
-    pipe.compile(device, properties);
-    compile.end();
+    // ManualTimer compile("compile");
+    // compile.start();
+    // pipe.compile(device, properties);
+    // compile.end();
 
     // by default DDIM is used, let's override to LMSDiscreteScheduler
-    pipe.set_scheduler(Text2ImagePipeline::Scheduler::from_config(models_path + "/scheduler/scheduler_config.json",
-        Text2ImagePipeline::Scheduler::Type::LMS_DISCRETE));
+    // pipe.set_scheduler(Text2ImagePipeline::Scheduler::from_config(models_path + "/scheduler/scheduler_config.json",
+    //     Text2ImagePipeline::Scheduler::Type::LMS_DISCRETE));
 
     Text2ImagePipeline::GenerationConfig default_generation_config = pipe.get_generation_config(); 
     if (read_np_latent)

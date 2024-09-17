@@ -18,10 +18,7 @@ namespace genai {
 
 class OPENVINO_GENAI_EXPORTS Generator {
 public:
-    using Ptr = std::shared_ptr<Generator>;
-
     virtual float next() = 0;
-
     virtual ~Generator();
 };
 
@@ -31,7 +28,6 @@ public:
     explicit CppStdGenerator(uint32_t seed);
 
     virtual float next() override;
-
 private:
     std::mt19937 gen;
     std::normal_distribution<float> normal;
@@ -69,7 +65,7 @@ public:
         size_t num_images_per_prompt = 1;
 
         // random generator to have deterministic results
-        Generator::Ptr random_generator = std::make_shared<CppStdGenerator>(42);
+        std::shared_ptr<Generator> random_generator = std::make_shared<CppStdGenerator>(42);
 
         // the following values depend on HF diffusers class used to perform generation
         float guidance_scale = 7.5f;
@@ -136,7 +132,7 @@ private:
     class StableDiffusionPipeline;
 };
 
-static constexpr ov::Property<Generator::Ptr> random_generator{"random_generator"};
+static constexpr ov::Property<std::shared_ptr<Generator>> random_generator{"random_generator"};
 
 static constexpr ov::Property<std::string> prompt2{"prompt2"};
 static constexpr ov::Property<std::string> prompt3{"prompt3"};
