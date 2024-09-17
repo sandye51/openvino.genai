@@ -9,13 +9,14 @@
 #include "openvino/core/any.hpp"
 #include "openvino/runtime/tensor.hpp"
 #include "openvino/runtime/infer_request.hpp"
+#include "openvino/runtime/properties.hpp"
 
 #include "openvino/genai/visibility.hpp"
 
 namespace ov {
 namespace genai {
 
-class AutoencoderKL {
+class OPENVINO_GENAI_EXPORTS AutoencoderKL {
 public:
     struct Config {
         size_t in_channels = 3;
@@ -33,13 +34,27 @@ public:
                   const std::string& device,
                   const ov::AnyMap& properties = {});
 
+    template <typename... Properties,
+              typename std::enable_if<ov::util::StringAny<Properties...>::value, bool>::type = true>
+    AutoencoderKL(const std::string& root_dir,
+                  const std::string& device,
+                  Properties&&... properties)
+        : AutoencoderKL(root_dir, device, ov::AnyMap{std::forward<Properties>(properties)...}) { }
+
     AutoencoderKL(const AutoencoderKL&);
 
-    void reshape(int batch_size, int height, int width);
+    AutoencoderKL& reshape(int batch_size, int height, int width);
 
-    void compile(const std::string& device, const ov::AnyMap& properties = {});
+    AutoencoderKL& compile(const std::string& device, const ov::AnyMap& properties = {});
 
-    ov::Tensor forward(ov::Tensor latent);
+    template <typename... Properties>
+    ov::util::EnableIfAllStringAny<AutoencoderKL&, Properties...> compile(
+            const std::string& device,
+            Properties&&... properties) {
+        return compile(device, ov::AnyMap{std::forward<Properties>(properties)...});
+    }
+
+    ov::Tensor infer(ov::Tensor latent);
 
 private:
     void merge_vae_image_processor() const;

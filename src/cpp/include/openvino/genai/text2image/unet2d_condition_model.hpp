@@ -13,11 +13,12 @@
 #include "openvino/core/model.hpp"
 #include "openvino/runtime/tensor.hpp"
 #include "openvino/runtime/infer_request.hpp"
+#include "openvino/runtime/properties.hpp"
 
 namespace ov {
 namespace genai {
 
-class UNet2DConditionModel {
+class OPENVINO_GENAI_EXPORTS UNet2DConditionModel {
 public:
     struct Config {
         size_t in_channels = 4;
@@ -34,19 +35,33 @@ public:
                          const std::string& device,
                          const ov::AnyMap& properties = {});
 
+    template <typename... Properties,
+              typename std::enable_if<ov::util::StringAny<Properties...>::value, bool>::type = true>
+    UNet2DConditionModel(const std::string& root_dir,
+                  const std::string& device,
+                  Properties&&... properties)
+        : UNet2DConditionModel(root_dir, device, ov::AnyMap{std::forward<Properties>(properties)...}) { }
+
     UNet2DConditionModel(const UNet2DConditionModel&);
 
     const Config& get_config() const;
 
     size_t get_vae_scale_factor() const;
 
-    void reshape(int batch_size, int height, int width, int tokenizer_model_max_length);
+    UNet2DConditionModel& reshape(int batch_size, int height, int width, int tokenizer_model_max_length);
 
-    void compile(const std::string& device, const ov::AnyMap& properties = {});
+    UNet2DConditionModel& compile(const std::string& device, const ov::AnyMap& properties = {});
+
+    template <typename... Properties>
+    ov::util::EnableIfAllStringAny<UNet2DConditionModel&, Properties...> compile(
+            const std::string& device,
+            Properties&&... properties) {
+        return compile(device, ov::AnyMap{std::forward<Properties>(properties)...});
+    }
 
     void set_hidden_states(const std::string& tensor_name, ov::Tensor encoder_hidden_states);
 
-    ov::Tensor forward(ov::Tensor sample, ov::Tensor timestep);
+    ov::Tensor infer(ov::Tensor sample, ov::Tensor timestep);
 
 private:
     Config m_config;

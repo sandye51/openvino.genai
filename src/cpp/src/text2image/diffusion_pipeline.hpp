@@ -4,7 +4,7 @@
 #include <fstream>
 
 #include "text2image/schedulers/ischeduler.hpp"
-#include "openvino/genai/text2image_pipeline.hpp"
+#include "openvino/genai/text2image/pipeline.hpp"
 
 #include "utils.hpp"
 

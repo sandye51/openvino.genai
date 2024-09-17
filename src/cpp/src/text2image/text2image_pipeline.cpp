@@ -79,13 +79,15 @@ Text2ImagePipeline::Text2ImagePipeline(const std::string& root_dir, const std::s
 }
 
 Text2ImagePipeline::Text2ImagePipeline(const std::shared_ptr<DiffusionPipeline>& impl) 
-    : m_impl(impl) { }
+    : m_impl(impl) {
+    assert(m_impl != nullptr);
+}
 
 Text2ImagePipeline Text2ImagePipeline::stable_diffusion(
     const std::shared_ptr<Scheduler>& scheduler,
-    const std::shared_ptr<CLIPTextModel>& clip_text_model,
-    const std::shared_ptr<UNet2DConditionModel>& unet,
-    const std::shared_ptr<AutoencoderKL>& vae_decoder) {
+    const CLIPTextModel& clip_text_model,
+    const UNet2DConditionModel& unet,
+    const AutoencoderKL& vae_decoder) {
     auto impl = std::make_shared<StableDiffusionPipeline>(clip_text_model, unet, vae_decoder);
 
     assert(scheduler != nullptr);
@@ -96,9 +98,9 @@ Text2ImagePipeline Text2ImagePipeline::stable_diffusion(
 
 Text2ImagePipeline Text2ImagePipeline::latent_consistency_model(
     const std::shared_ptr<Scheduler>& scheduler,
-    const std::shared_ptr<CLIPTextModel>& clip_text_model,
-    const std::shared_ptr<UNet2DConditionModel>& unet,
-    const std::shared_ptr<AutoencoderKL>& vae_decoder) {
+    const CLIPTextModel& clip_text_model,
+    const UNet2DConditionModel& unet,
+    const AutoencoderKL& vae_decoder) {
     return stable_diffusion(scheduler, clip_text_model, unet, vae_decoder);
 }
 

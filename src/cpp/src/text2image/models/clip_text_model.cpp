@@ -1,7 +1,7 @@
 // Copyright (C) 2023-2024 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-#include "text2image/models/clip_text_model.hpp"
+#include "openvino/genai/text2image/clip_text_model.hpp"
 
 #include <fstream>
 
@@ -40,7 +40,7 @@ const CLIPTextModel::Config& CLIPTextModel::get_config() const {
     return m_config;
 }
 
-void CLIPTextModel::reshape(int batch_size) {
+CLIPTextModel& CLIPTextModel::reshape(int batch_size) {
     OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot reshape already compiled model");
 
     ov::PartialShape input_shape = m_model->input(0).get_partial_shape();
@@ -48,17 +48,21 @@ void CLIPTextModel::reshape(int batch_size) {
     input_shape[1] = m_config.max_position_embeddings;
     std::map<size_t, ov::PartialShape> idx_to_shape{{0, input_shape}};
     m_model->reshape(idx_to_shape);
+
+    return *this;
 }
 
-void CLIPTextModel::compile(const std::string& device, const ov::AnyMap& properties) {
+CLIPTextModel& CLIPTextModel::compile(const std::string& device, const ov::AnyMap& properties) {
     OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot re-compile already compiled model");
     ov::CompiledModel compiled_model = ov::Core().compile_model(m_model, device, properties);
     m_request = compiled_model.create_infer_request();
     // release the original model
     m_model.reset();
+
+    return *this;
 }
 
-ov::Tensor CLIPTextModel::forward(const std::string& pos_prompt, const std::string& neg_prompt, bool do_classifier_free_guidance) {
+ov::Tensor CLIPTextModel::infer(const std::string& pos_prompt, const std::string& neg_prompt, bool do_classifier_free_guidance) {
     OPENVINO_ASSERT(m_request, "CLIP text encoder model must be compiled first. Cannot infer non-compiled model");
 
     const int32_t pad_token_id = m_clip_tokenizer.get_pad_token_id();
@@ -92,12 +96,6 @@ ov::Tensor CLIPTextModel::forward(const std::string& pos_prompt, const std::stri
     m_request.infer();
 
     return m_request.get_output_tensor(0);
-}
-
-OPENVINO_GENAI_EXPORTS
-std::shared_ptr<CLIPTextModel> clip_text_model(const std::string& clip_text_encoder_root_dir,
-    const std::string& device, const ov::AnyMap& properties) {
-    return std::make_shared<CLIPTextModel>(clip_text_encoder_root_dir, device, properties);
 }
 
 } // namespace genai

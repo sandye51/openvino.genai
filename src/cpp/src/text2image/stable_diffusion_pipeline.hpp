@@ -6,10 +6,6 @@
 #include <ctime>
 #include <cassert>
 
-#include "text2image/models/clip_text_model.hpp"
-#include "text2image/models/unet2d_condition_model.hpp"
-#include "text2image/models/autoencoder_kl.hpp"
-
 #include "utils.hpp"
 
 namespace ov {
@@ -113,16 +109,12 @@ public:
     }
 
     StableDiffusionPipeline(
-        const std::shared_ptr<CLIPTextModel>& clip_text_model,
-        const std::shared_ptr<UNet2DConditionModel>& unet,
-        const std::shared_ptr<AutoencoderKL>& vae_decoder)
-        : m_clip_text_encoder(m_clip_text_encoder),
-          m_unet(m_unet),
-          m_vae_decoder(m_vae_decoder) {
-        assert(m_clip_text_encoder != nullptr);
-        assert(m_unet != nullptr);
-        assert(m_vae_decoder != nullptr);
-    }
+        const CLIPTextModel& clip_text_model,
+        const UNet2DConditionModel& unet,
+        const AutoencoderKL& vae_decoder)
+        : m_clip_text_encoder(std::make_shared<CLIPTextModel>(clip_text_model)),
+          m_unet(std::make_shared<UNet2DConditionModel>(unet)),
+          m_vae_decoder(std::make_shared<AutoencoderKL>(vae_decoder)) { }
 
     void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) override {
         check_inputs(height, width);
@@ -162,7 +154,7 @@ public:
             generation_config.random_generator = std::make_shared<CppStdGenerator>(seed);
         }
 
-        ov::Tensor encoder_hidden_states = m_clip_text_encoder->forward(positive_prompt, generation_config.negative_prompt,
+        ov::Tensor encoder_hidden_states = m_clip_text_encoder->infer(positive_prompt, generation_config.negative_prompt,
             batch_size_multiplier > 1);
 
         // replicate encoder hidden state to UNet model
@@ -218,7 +210,7 @@ public:
             m_scheduler->scale_model_input(latent_cfg, inference_step);
 
             ov::Tensor timestep(ov::element::i64, {1}, &timesteps[inference_step]);
-            ov::Tensor noise_pred_tensor = m_unet->forward(latent_cfg, timestep);
+            ov::Tensor noise_pred_tensor = m_unet->infer(latent_cfg, timestep);
 
             ov::Shape noise_pred_shape = noise_pred_tensor.get_shape();
             noise_pred_shape[0] /= batch_size_multiplier;
@@ -246,7 +238,7 @@ public:
             denoised = it != scheduler_step_result.end() ? it->second : latent;
         }
 
-        return m_vae_decoder->forward(denoised);
+        return m_vae_decoder->infer(denoised);
     }
 
 private:

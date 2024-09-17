@@ -1,7 +1,7 @@
 // Copyright (C) 2023-2024 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-#include "text2image/models/unet2d_condition_model.hpp"
+#include "openvino/genai/text2image/unet2d_condition_model.hpp"
 
 #include <fstream>
 
@@ -47,7 +47,7 @@ size_t UNet2DConditionModel::get_vae_scale_factor() const {
     return m_vae_scale_factor;
 }
 
-void UNet2DConditionModel::reshape(int batch_size, int height, int width, int tokenizer_model_max_length) {
+UNet2DConditionModel& UNet2DConditionModel::reshape(int batch_size, int height, int width, int tokenizer_model_max_length) {
     OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot reshape already compiled model");
 
     height /= m_vae_scale_factor;
@@ -71,14 +71,18 @@ void UNet2DConditionModel::reshape(int batch_size, int height, int width, int to
     }
 
     m_model->reshape(name_to_shape);
+
+    return *this;
 }
 
-void UNet2DConditionModel::compile(const std::string& device, const ov::AnyMap& properties) {
+UNet2DConditionModel& UNet2DConditionModel::compile(const std::string& device, const ov::AnyMap& properties) {
     OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot re-compile already compiled model");
     ov::CompiledModel compiled_model = ov::Core().compile_model(m_model, device, properties);
     m_request = compiled_model.create_infer_request();
     // release the original model
     m_model.reset();
+
+    return *this;
 }
 
 void UNet2DConditionModel::set_hidden_states(const std::string& tensor_name, ov::Tensor encoder_hidden_states) {
@@ -86,7 +90,7 @@ void UNet2DConditionModel::set_hidden_states(const std::string& tensor_name, ov:
     m_request.set_tensor(tensor_name, encoder_hidden_states);
 }
 
-ov::Tensor UNet2DConditionModel::forward(ov::Tensor sample, ov::Tensor timestep) {
+ov::Tensor UNet2DConditionModel::infer(ov::Tensor sample, ov::Tensor timestep) {
     OPENVINO_ASSERT(m_request, "UNet model must be compiled first. Cannot infer non-compiled model");
 
     m_request.set_tensor("sample", sample);
@@ -96,13 +100,6 @@ ov::Tensor UNet2DConditionModel::forward(ov::Tensor sample, ov::Tensor timestep)
 
     return m_request.get_output_tensor();
 }
-
-OPENVINO_GENAI_EXPORTS
-std::shared_ptr<UNet2DConditionModel> unet2d_condition_model(const std::string& unet2d_condition_model_root_dir,
-    const std::string& device, const ov::AnyMap& properties) {
-    return std::make_shared<UNet2DConditionModel>(unet2d_condition_model_root_dir, device, properties);
-}
-
 
 } // namespace genai
 } // namespace ov

@@ -1,7 +1,7 @@
 // Copyright (C) 2023-2024 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-#include "text2image/models/autoencoder_kl.hpp"
+#include "openvino/genai/text2image/autoencoder_kl.hpp"
 
 #include <fstream>
 #include <memory>
@@ -47,7 +47,7 @@ AutoencoderKL::AutoencoderKL(const std::string& root_dir,
 
 AutoencoderKL::AutoencoderKL(const AutoencoderKL&) = default;
 
-void AutoencoderKL::reshape(int batch_size, int height, int width) {
+AutoencoderKL& AutoencoderKL::reshape(int batch_size, int height, int width) {
     OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot reshape already compiled model");
 
     const size_t vae_scale_factor = std::pow(2, m_config.block_out_channels.size() - 1);
@@ -58,17 +58,21 @@ void AutoencoderKL::reshape(int batch_size, int height, int width) {
     ov::PartialShape input_shape = m_model->input(0).get_partial_shape();
     std::map<size_t, ov::PartialShape> idx_to_shape{{0, {batch_size, input_shape[1], height, width}}};
     m_model->reshape(idx_to_shape);
+
+    return *this;
 }
 
-void AutoencoderKL::compile(const std::string& device, const ov::AnyMap& properties) {
+AutoencoderKL& AutoencoderKL::compile(const std::string& device, const ov::AnyMap& properties) {
     OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot re-compile already compiled model");
     ov::CompiledModel compiled_model = ov::Core().compile_model(m_model, device, properties);
     m_request = compiled_model.create_infer_request();
     // release the original model
     m_model.reset();
+
+    return *this;
 }
 
-ov::Tensor AutoencoderKL::forward(ov::Tensor latent) {
+ov::Tensor AutoencoderKL::infer(ov::Tensor latent) {
     OPENVINO_ASSERT(m_request, "VAE decoder model must be compiled first. Cannot infer non-compiled model");
 
     m_request.set_input_tensor(latent);
@@ -99,12 +103,6 @@ void AutoencoderKL::merge_vae_image_processor() const {
     ppp.output().tensor().set_layout("NHWC");
 
     ppp.build();
-}
-
-OPENVINO_GENAI_EXPORTS
-std::shared_ptr<AutoencoderKL> autoencoder_kl(const std::string& autoencoder_kl_root_dir,
-    const std::string& device, const ov::AnyMap& properties) {
-    return std::make_shared<AutoencoderKL>(autoencoder_kl_root_dir, device, properties);
 }
 
 } // namespace genai

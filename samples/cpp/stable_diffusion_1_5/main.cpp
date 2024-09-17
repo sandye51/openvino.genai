@@ -12,7 +12,7 @@
 #include "openvino/core/version.hpp"
 #include "openvino/runtime/properties.hpp"
 
-#include "openvino/genai/text2image_pipeline.hpp"
+#include "openvino/genai/text2image/pipeline.hpp"
 
 using namespace ov::genai;
 
@@ -100,7 +100,7 @@ int32_t main(int32_t argc, char* argv[]) try {
         return EXIT_SUCCESS;
     }
 
-    std::string positive_prompt = result["posPrompt"].as<std::string>();
+    std::string prompt = result["posPrompt"].as<std::string>();
     std::string negative_prompt = result["negPrompt"].as<std::string>();
     const std::string device = result["device"].as<std::string>();
     const uint32_t num_inference_steps = result["step"].as<size_t>();
@@ -134,13 +134,40 @@ int32_t main(int32_t argc, char* argv[]) try {
     if (use_cache)
         properties.insert(ov::cache_dir("./cache_dir"));
 
+    // Simple usage
+    {
+        Text2ImagePipeline pipe(models_path, "CPU");
+        ov::Tensor image = pipe.generate(prompt);
+
+        imwrite("image.bmp", image, true);
+    }
+
+    // With reshape and some custom values in generation config
+    {
+        Text2ImagePipeline pipe(models_path);
+        pipe.reshape(2, 512, 512, pipe.get_generation_config().guidance_scale);
+        ov::Tensor images = pipe.generate(prompt,
+            ov::genai::negative_prompt("some negative prompt"),
+            ov::genai::num_images_per_prompt(2));
+
+        imwrite("image_0.bmp", ov::Tensor(images, { 0, 0, 0, 0 }, { 1, 512, 512, 3 }), true);
+        imwrite("image_1.bmp", ov::Tensor(images, { 1, 0, 0, 0 }, { 2, 512, 512, 3 }), true);
+    }
+
+    // With manual device mapping per model
+    {
+        Text2ImagePipeline pipe = Text2ImagePipeline::stable_diffusion(
+            Text2ImagePipeline::Scheduler::from_config(models_path),
+            CLIPTextModel(models_path).reshape(2).compile("NPU"),
+            UNet2DConditionModel(models_path, "CPU", ov::hint::inference_precision(ov::element::f32)),
+            AutoencoderKL(models_path, "GPU", ov::cache_dir("./cache"))
+        );
+        ov::Tensor image = pipe.generate(prompt);
+        imwrite("image.bmp", image, true);
+    }
+
     ManualTimer creation("creation");
     creation.start();
-    // auto pipe = Text2ImagePipeline::stable_diffusion(
-    //     Text2ImagePipeline::Scheduler::from_config(models_path + "/scheduler/scheduler_config.json", Text2ImagePipeline::Scheduler::LMS_DISCRETE),
-    //     clip_text_model(models_path + "/text_encoder", "CPU"),
-    //     unet2d_condition_model(models_path + "/unet", "CPU"),
-    //     autoencoder_kl(models_path + "/vae_decoder", "CPU"));
     Text2ImagePipeline pipe(models_path);
     creation.end();
 
@@ -174,7 +201,7 @@ int32_t main(int32_t argc, char* argv[]) try {
 
     ManualTimer generate("generate");
     generate.start();
-    ov::Tensor generated_images = pipe.generate(positive_prompt, generation_config(default_generation_config));
+    ov::Tensor generated_images = pipe.generate(prompt, generation_config(default_generation_config));
     generate.end();
 
     for (size_t n = 0; n < num_images_per_prompt; ++n) {

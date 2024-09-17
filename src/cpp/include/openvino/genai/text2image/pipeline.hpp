@@ -13,6 +13,10 @@
 
 #include "openvino/genai/visibility.hpp"
 
+#include "openvino/genai/text2image/clip_text_model.hpp"
+#include "openvino/genai/text2image/unet2d_condition_model.hpp"
+#include "openvino/genai/text2image/autoencoder_kl.hpp"
+
 namespace ov {
 namespace genai {
 
@@ -36,14 +40,6 @@ private:
     std::mt19937 gen;
     std::normal_distribution<float> normal;
 };
-
-//
-// Forward declarations for model classes
-//
-
-class CLIPTextModel;
-class UNet2DConditionModel;
-class AutoencoderKL;
 
 //
 // Text to image pipeline
@@ -102,16 +98,16 @@ public:
     // creates either LCM or SD pipeline from building blocks
     static Text2ImagePipeline stable_diffusion(
         const std::shared_ptr<Scheduler>& scheduler_type,
-        const std::shared_ptr<CLIPTextModel>& clip_text_model,
-        const std::shared_ptr<UNet2DConditionModel>& unet,
-        const std::shared_ptr<AutoencoderKL>& vae_decoder);
+        const CLIPTextModel& clip_text_model,
+        const UNet2DConditionModel& unet,
+        const AutoencoderKL& vae_decoder);
 
     // creates either LCM or SD pipeline from building blocks
     static Text2ImagePipeline latent_consistency_model(
         const std::shared_ptr<Scheduler>& scheduler_type,
-        const std::shared_ptr<CLIPTextModel>& clip_text_model,
-        const std::shared_ptr<UNet2DConditionModel>& unet,
-        const std::shared_ptr<AutoencoderKL>& vae_decoder);
+        const CLIPTextModel& clip_text_model,
+        const UNet2DConditionModel& unet,
+        const AutoencoderKL& vae_decoder);
 
     GenerationConfig get_generation_config() const;
     void set_generation_config(const GenerationConfig& generation_config);
@@ -138,7 +134,7 @@ private:
     class DiffusionPipeline;
     std::shared_ptr<DiffusionPipeline> m_impl;
 
-    Text2ImagePipeline(const std::shared_ptr<DiffusionPipeline>& impl);
+    explicit Text2ImagePipeline(const std::shared_ptr<DiffusionPipeline>& impl);
 
     class StableDiffusionPipeline;
 };
@@ -146,8 +142,6 @@ private:
 //
 // Generation config properties
 //
-
-static constexpr ov::Property<std::shared_ptr<Generator>> random_generator{"random_generator"};
 
 static constexpr ov::Property<std::string> prompt2{"prompt2"};
 static constexpr ov::Property<std::string> prompt3{"prompt3"};
@@ -157,48 +151,15 @@ static constexpr ov::Property<std::string> negative_prompt2{"negative_prompt2"};
 static constexpr ov::Property<std::string> negative_prompt3{"negative_prompt3"};
 
 static constexpr ov::Property<size_t> num_images_per_prompt{"num_images_per_prompt"};
-
 static constexpr ov::Property<float> guidance_scale{"guidance_scale"};
 static constexpr ov::Property<int64_t> height{"height"};
 static constexpr ov::Property<int64_t> width{"width"};
 static constexpr ov::Property<size_t> num_inference_steps{"num_inference_steps"};
 
+static constexpr ov::Property<std::shared_ptr<Generator>> random_generator{"random_generator"};
+
 OPENVINO_GENAI_EXPORTS
 std::pair<std::string, ov::Any> generation_config(const Text2ImagePipeline::GenerationConfig& generation_config);
-
-//
-// Helprs to manually create text to image pipeline
-//
-
-OPENVINO_GENAI_EXPORTS
-std::shared_ptr<CLIPTextModel> clip_text_model(const std::string& clip_text_encoder_root_dir,
-    const std::string& device, const ov::AnyMap& properties = {});
-template <typename... Properties>
-ov::util::EnableIfAllStringAny<std::shared_ptr<CLIPTextModel>, Properties...> clip_text_model(
-    const std::string& clip_text_encoder_root_dir,
-    const std::string& device, Properties&&... properties) {
-    return clip_text_model(clip_text_encoder_root_dir, device, ov::AnyMap{std::forward<Properties>(properties)...});
-}
-
-OPENVINO_GENAI_EXPORTS
-std::shared_ptr<UNet2DConditionModel> unet2d_condition_model(const std::string& unet2d_condition_model_root_dir,
-    const std::string& device, const ov::AnyMap& properties = {});
-template <typename... Properties>
-ov::util::EnableIfAllStringAny<std::shared_ptr<UNet2DConditionModel>, Properties...> unet2dcondition(
-    const std::string& unet2d_condition_model_root_dir,
-    const std::string& device, Properties&&... properties) {
-    return unet2d_condition_model(unet2d_condition_model_root_dir, device, ov::AnyMap{std::forward<Properties>(properties)...});
-}
-
-OPENVINO_GENAI_EXPORTS
-std::shared_ptr<AutoencoderKL> autoencoder_kl(const std::string& autoencoder_kl_root_dir,
-    const std::string& device, const ov::AnyMap& properties = {});
-template <typename... Properties>
-ov::util::EnableIfAllStringAny<std::shared_ptr<AutoencoderKL>, Properties...> autoencoder_kl(
-    const std::string& autoencoder_kl_root_dir,
-    const std::string& device, Properties&&... properties) {
-    return autoencoder_kl(autoencoder_kl_root_dir, device, ov::AnyMap{std::forward<Properties>(properties)...});
-}
 
 } // namespace genai
 } // namespace ov
