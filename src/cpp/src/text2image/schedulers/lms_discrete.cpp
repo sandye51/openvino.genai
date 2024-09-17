@@ -98,7 +98,7 @@ LMSDiscreteScheduler::Config::Config(const std::string& scheduler_config_path) {
     OPENVINO_ASSERT(file.is_open(), "Failed to open ", scheduler_config_path);
 
     nlohmann::json data = nlohmann::json::parse(file);
-    using ov::genai::utils::read_json_param;
+    using utils::read_json_param;
 
     read_json_param(data, "beta_start", beta_start);
     read_json_param(data, "beta_end", beta_end);

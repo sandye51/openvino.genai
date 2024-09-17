@@ -16,6 +16,10 @@
 namespace ov {
 namespace genai {
 
+//
+// Random generators
+//
+
 class OPENVINO_GENAI_EXPORTS Generator {
 public:
     virtual float next() = 0;
@@ -33,10 +37,17 @@ private:
     std::normal_distribution<float> normal;
 };
 
-// forward declarations
+//
+// Forward declarations for model classes
+//
+
 class CLIPTextModel;
 class UNet2DConditionModel;
 class AutoencoderKL;
+
+//
+// Text to image pipeline
+//
 
 class OPENVINO_GENAI_EXPORTS Text2ImagePipeline {
 public:
@@ -132,6 +143,10 @@ private:
     class StableDiffusionPipeline;
 };
 
+//
+// Generation config properties
+//
+
 static constexpr ov::Property<std::shared_ptr<Generator>> random_generator{"random_generator"};
 
 static constexpr ov::Property<std::string> prompt2{"prompt2"};
@@ -150,6 +165,10 @@ static constexpr ov::Property<size_t> num_inference_steps{"num_inference_steps"}
 
 OPENVINO_GENAI_EXPORTS
 std::pair<std::string, ov::Any> generation_config(const Text2ImagePipeline::GenerationConfig& generation_config);
+
+//
+// Helprs to manually create text to image pipeline
+//
 
 OPENVINO_GENAI_EXPORTS
 std::shared_ptr<CLIPTextModel> clip_text_model(const std::string& clip_text_encoder_root_dir,

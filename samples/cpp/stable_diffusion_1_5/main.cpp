@@ -136,28 +136,31 @@ int32_t main(int32_t argc, char* argv[]) try {
 
     ManualTimer creation("creation");
     creation.start();
-    auto pipe = Text2ImagePipeline::stable_diffusion(
-        Text2ImagePipeline::Scheduler::from_config(models_path + "/scheduler/scheduler_config.json", Text2ImagePipeline::Scheduler::LMS_DISCRETE),
-        clip_text_model(models_path + "/text_encoder", "CPU"),
-        unet2d_condition_model(models_path + "/unet", "CPU"),
-        autoencoder_kl(models_path + "/vae_decoder", "CPU", ov::cache_dir("./")));
+    // auto pipe = Text2ImagePipeline::stable_diffusion(
+    //     Text2ImagePipeline::Scheduler::from_config(models_path + "/scheduler/scheduler_config.json", Text2ImagePipeline::Scheduler::LMS_DISCRETE),
+    //     clip_text_model(models_path + "/text_encoder", "CPU"),
+    //     unet2d_condition_model(models_path + "/unet", "CPU"),
+    //     autoencoder_kl(models_path + "/vae_decoder", "CPU"));
+    Text2ImagePipeline pipe(models_path);
     creation.end();
 
-    // if (!use_dynamic_shapes) {
-    //     ManualTimer reshape("reshape");
-    //     reshape.start();
-    //     pipe.reshape(num_images_per_prompt, height, width, guidance_scale);
-    //     reshape.end();
-    // }
+    std::cout << "!" << std::endl;
 
-    // ManualTimer compile("compile");
-    // compile.start();
-    // pipe.compile(device, properties);
-    // compile.end();
+    if (!use_dynamic_shapes) {
+        ManualTimer reshape("reshape");
+        reshape.start();
+        pipe.reshape(num_images_per_prompt, height, width, guidance_scale);
+        reshape.end();
+    }
+
+    ManualTimer compile("compile");
+    compile.start();
+    pipe.compile(device, properties);
+    compile.end();
 
     // by default DDIM is used, let's override to LMSDiscreteScheduler
-    // pipe.set_scheduler(Text2ImagePipeline::Scheduler::from_config(models_path + "/scheduler/scheduler_config.json",
-    //     Text2ImagePipeline::Scheduler::Type::LMS_DISCRETE));
+    pipe.set_scheduler(Text2ImagePipeline::Scheduler::from_config(models_path + "/scheduler/scheduler_config.json",
+        Text2ImagePipeline::Scheduler::Type::LMS_DISCRETE));
 
     Text2ImagePipeline::GenerationConfig default_generation_config = pipe.get_generation_config(); 
     if (read_np_latent)

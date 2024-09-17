@@ -11,6 +11,8 @@
 namespace ov {
 namespace genai {
 
+static constexpr char SD_GENERATION_CONFIG[] = "SD_GENERATION_CONFIG";
+
 Generator::~Generator() = default;
 
 CppStdGenerator::CppStdGenerator(uint32_t seed)
@@ -26,14 +28,14 @@ float CppStdGenerator::next() {
 //
 
 std::pair<std::string, ov::Any> generation_config(const Text2ImagePipeline::GenerationConfig& generation_config) {
-    return {"SD_GENERATION_CONFIG", ov::Any::make<Text2ImagePipeline::GenerationConfig>(generation_config)};
+    return {SD_GENERATION_CONFIG, ov::Any::make<Text2ImagePipeline::GenerationConfig>(generation_config)};
 }
 
 void Text2ImagePipeline::GenerationConfig::update_generation_config(const ov::AnyMap& properties) {
     using utils::read_anymap_param;
 
     // override whole generation config first
-    read_anymap_param(properties, "SD_GENERATION_CONFIG", *this);
+    read_anymap_param(properties, SD_GENERATION_CONFIG, *this);
     // then try per-parameter values
     read_anymap_param(properties, "negative_prompt", negative_prompt);
     read_anymap_param(properties, "num_images_per_prompt", num_images_per_prompt);

@@ -15,7 +15,7 @@ UNet2DConditionModel::Config::Config(const std::string& config_path) {
     OPENVINO_ASSERT(file.is_open(), "Failed to open ", config_path);
 
     nlohmann::json data = nlohmann::json::parse(file);
-    using ov::genai::utils::read_json_param;
+    using utils::read_json_param;
 
     read_json_param(data, "in_channels", in_channels);
     read_json_param(data, "sample_size", sample_size);

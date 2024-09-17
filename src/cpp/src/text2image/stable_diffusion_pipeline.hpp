@@ -48,27 +48,27 @@ public:
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
 
         nlohmann::json data = nlohmann::json::parse(file);
-        using ov::genai::utils::read_json_param;
+        using utils::read_json_param;
 
-        set_scheduler(Scheduler::from_config(root_dir));
+        set_scheduler(Scheduler::from_config(root_dir + "/scheduler/scheduler_config.json"));
 
         const std::string text_encoder = data["text_encoder"][1].get<std::string>();
         if (text_encoder == "CLIPTextModel") {
-            m_clip_text_encoder = std::make_shared<CLIPTextModel>(root_dir);
+            m_clip_text_encoder = std::make_shared<CLIPTextModel>(root_dir + "/text_encoder");
         } else {
             OPENVINO_THROW("Unsupported '", text_encoder, "' text encoder type");
         }
 
         const std::string unet = data["unet"][1].get<std::string>();
         if (unet == "UNet2DConditionModel") {
-            m_unet = std::make_shared<UNet2DConditionModel>(root_dir);
+            m_unet = std::make_shared<UNet2DConditionModel>(root_dir + "/unet");
         } else {
             OPENVINO_THROW("Unsupported '", unet, "' UNet type");
         }
 
         const std::string vae = data["vae"][1].get<std::string>();
         if (vae == "AutoencoderKL") {
-            m_vae_decoder = std::make_shared<AutoencoderKL>(root_dir);
+            m_vae_decoder = std::make_shared<AutoencoderKL>(root_dir + "/vae_decoder");
         } else {
             OPENVINO_THROW("Unsupported '", vae, "' VAE decoder type");
         }
@@ -83,7 +83,7 @@ public:
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
 
         nlohmann::json data = nlohmann::json::parse(file);
-        using ov::genai::utils::read_json_param;
+        using utils::read_json_param;
 
         set_scheduler(Scheduler::from_config(root_dir + "/scheduler/scheduler_config.json"));
 
