@@ -6,6 +6,7 @@
 #include <fstream>
 #include <memory>
 
+#include "openvino/runtime/core.hpp"
 #include "openvino/core/preprocess/pre_post_process.hpp"
 #include "openvino/op/clamp.hpp"
 #include "openvino/op/add.hpp"

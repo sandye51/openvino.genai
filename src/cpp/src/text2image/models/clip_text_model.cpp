@@ -5,6 +5,8 @@
 
 #include <fstream>
 
+#include "openvino/runtime/core.hpp"
+
 #include "utils.hpp"
 
 namespace ov {

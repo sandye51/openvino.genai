@@ -6,7 +6,8 @@
 #include <string>
 #include <vector>
 #include <initializer_list>
-#include <openvino/runtime/tensor.hpp>
+
+#include "openvino/runtime/tensor.hpp"
 #include "openvino/genai/visibility.hpp"
 
 namespace ov {

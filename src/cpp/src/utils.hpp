@@ -5,7 +5,6 @@
 
 #include "openvino/genai/llm_pipeline.hpp"
 
-#include <openvino/openvino.hpp>
 #include <nlohmann/json.hpp>
 
 namespace ov {
@@ -24,7 +23,6 @@ ov::Tensor extend_attention(ov::Tensor attention_mask);
 
 void update_position_ids(ov::Tensor&& position_ids, const ov::Tensor&& attention_mask);
 
-
 /// @brief reads value to param if T argument type is aligned with value stores in json
 /// if types are not compatible leave param unchanged
 template <typename T>
@@ -33,6 +31,15 @@ void read_json_param(const nlohmann::json& data, const std::string& name, T& par
         if (data[name].is_number() || data[name].is_boolean() || data[name].is_string()) {
             param = data[name].get<T>();
         }
+    } else if (name.find(".") != std::string::npos) {
+        size_t delimiter_pos = name.find(".");
+        std::string key = name.substr(0, delimiter_pos);
+        if (!data.contains(key)) {
+            return;
+        }
+        std::string rest_key = name.substr(delimiter_pos + 1);
+
+        read_json_param(data[key], rest_key, param);
     }
 }
 
