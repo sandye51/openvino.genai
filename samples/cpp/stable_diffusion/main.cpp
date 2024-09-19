@@ -12,7 +12,10 @@ int32_t main(int32_t argc, char* argv[]) try {
     const std::string device = "CPU";  // GPU, NPU can be used as well
 
     ov::genai::Text2ImagePipeline pipe(models_path, device);
-    ov::Tensor image = pipe.generate(prompt);
+    ov::Tensor image = pipe.generate(prompt,
+        ov::genai::width(512),
+        ov::genai::height(512),
+        ov::genai::num_inference_steps(20));
 
     imwrite("image.bmp", image, true);
 
