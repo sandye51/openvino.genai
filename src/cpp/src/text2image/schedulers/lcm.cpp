@@ -84,8 +84,8 @@ LCMScheduler::LCMScheduler(const Config& scheduler_config)
             betas.push_back(m_config.beta_start + (m_config.beta_end - m_config.beta_start) * i / (m_config.num_train_timesteps - 1));
         }
     } else if (m_config.beta_schedule == BetaSchedule::SCALED_LINEAR) {
-        float start = std::sqrtf(m_config.beta_start);
-        float end = std::sqrtf(m_config.beta_end);
+        float start = std::sqrt(m_config.beta_start);
+        float end = std::sqrt(m_config.beta_end);
         std::vector<float> temp = linspace<float, float>(start, end, m_config.num_train_timesteps, true);
         for (float b : temp) {
             betas.push_back(b * b);
